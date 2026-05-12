@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+tensorflow-cpu
+numpy
+pillow
+opencv-python
+tf-explain

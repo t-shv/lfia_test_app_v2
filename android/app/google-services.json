@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "436379873672",
+    "project_id": "lfia-test-app",
+    "storage_bucket": "lfia-test-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:436379873672:android:e9885d2f0dfe74d8cb0a3d",
+        "android_client_info": {
+          "package_name": "com.example.lfia_test_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqeH450ZDB8xjm1N_wPMzw2zYrlqgRb-k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
