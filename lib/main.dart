@@ -16,7 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:gallery_saver/gallery_saver.dart';
+import 'package:gal/gal.dart'; //changed
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart' show SystemChrome, SystemUiOverlayStyle;
 
@@ -295,9 +295,9 @@ class AnalysisResultFullScreen extends StatelessWidget {
     final newPath = '${saveDir.path}/$fname';
     await File(imagePath).copy(newPath);
 
-    // ✅ 1.5) Save to camera roll
+    // ✅ 1.5) Save to camera roll  // await line chnaged
     try {
-      await GallerySaver.saveImage(newPath, albumName: 'LFIA Tests');
+      await Gal.putImage(newPath, album: 'LFIA Tests');
     } catch (e) {
       debugPrint('Failed to save to gallery: $e');
     }
