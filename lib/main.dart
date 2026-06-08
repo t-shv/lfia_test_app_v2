@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'helpers/qr_file.dart';
 
@@ -18,43 +18,54 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:gallery_saver/gallery_saver.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/services.dart' show SystemChrome, SystemUiOverlayStyle;
+import 'package:flutter/services.dart'
+    show SystemChrome, SystemUiOverlayStyle;
 
 import 'live_guide_camera.dart';
 import 'learn_more_screen.dart';
 
 /// Valid QR codes issued by the test-strip producer
-const validTestStripQRCodes = <String>{'TS-0001', 'TS-0002', 'TS-0003'};
+const validTestStripQRCodes = <String>{
+  'TS-0001',
+  'COV-19-TS-0000020-1219',
+  'COV-19-TS-0000020-0915',
+  'COV-19-TS-0000109-1219',
+};
 
 /// Preprocess image to match CNN input requirements
 Future<Float32List> _preprocessImage(String path) async {
   final bytes = await File(path).readAsBytes();
-  final image = img.decodeImage(bytes)!;
+  final image = img.decodeImage(bytes);
+
+  if (image == null) {
+    throw StateError('Could not decode image for CNN: $path');
+  }
+
   const int size = 256;
   final grayscale = img.grayscale(image);
   final resized = img.copyResize(grayscale, width: size, height: size);
+
   final out = Float32List(size * size);
   var idx = 0;
+
   for (var y = 0; y < size; y++) {
     for (var x = 0; x < size; x++) {
       out[idx++] = img.getRed(resized.getPixel(x, y)) / 255.0;
     }
   }
+
   return out;
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Status & nav bars to match the light Cupertino theme
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark, // Android: dark icons
-      statusBarBrightness: Brightness.light, // iOS
-      systemNavigationBarColor: Color(
-        0xFFFCFCFE,
-      ), // same as scaffold background
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+      systemNavigationBarColor: Color(0xFFFCFCFE),
       systemNavigationBarIconBrightness: Brightness.dark,
     ),
   );
@@ -67,6 +78,7 @@ Future<void> main() async {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return const CupertinoApp(
@@ -81,11 +93,11 @@ class MyApp extends StatelessWidget {
           navTitleTextStyle: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
-            color: CupertinoColors.label, // <— readable nav titles
+            color: CupertinoColors.label,
           ),
         ),
       ),
-      home: CameraScreen(), // keep your existing home
+      home: CameraScreen(),
     );
   }
 }
@@ -93,6 +105,7 @@ class MyApp extends StatelessWidget {
 /// ───────────────────────── CameraScreen ─────────────────────────
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
+
   @override
   State<CameraScreen> createState() => _CameraScreenState();
 }
@@ -100,139 +113,248 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   static const double _optimalThreshold = 0.5955;
 
-  Future<void> _processCapture(String imagePath, Barcode previewQr) async {
-    /* -------- 0.  Location (unchanged) -------- */
-    double? latitude, longitude;
+  Future<void> _processCapture(String imagePath, LockedQr previewQr) async {
     try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.whileInUse ||
-          perm == LocationPermission.always) {
-        final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-        latitude = pos.latitude;
-        longitude = pos.longitude;
-      }
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    /* -------- 1.  Re-validate the QR on the STILL photo -------- */
-    // We try to detect the QR again on the saved JPEG; if that fails,
-    // we fall back to the quick-preview barcode.
-    final Barcode qr = await detectQrOnFile(imagePath) ?? previewQr;
-
-    final code = qr.rawValue ?? '';
-    if (!validTestStripQRCodes.contains(code)) {
-      await showCupertinoDialog(
-        context: context,
-        builder:
-            (_) => CupertinoAlertDialog(
-              title: const Text('Unrecognized Strip'),
-              content: Text('QR code "$code" is not on the approved list.'),
-              actions: [
-                CupertinoDialogAction(
-                  child: const Text('OK'),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
+      debugPrint('====== _processCapture START ======');
+      debugPrint('imagePath: $imagePath');
+      debugPrint(
+        'preview capture size: '
+        '${previewQr.captureSize.width} x ${previewQr.captureSize.height}',
       );
-      return; // stop here – nothing more to do
-    }
 
-    /* -------- 2.  Quick feedback (unchanged) -------- */
-    await showCupertinoDialog(
-      context: context,
-      builder:
-          (_) => CupertinoAlertDialog(
-            title: const Text('Valid Strip Detected'),
-            content: Text(code),
+      /* -------- 0. Location -------- */
+      final location = await _getLocationIfAvailable();
+      final latitude = location?.latitude;
+      final longitude = location?.longitude;
+
+      if (!mounted) return;
+
+      /* -------- 1. Decode and orient the still photo -------- */
+      final originalFile = File(imagePath);
+
+      if (!await originalFile.exists()) {
+        throw StateError('Captured file does not exist: $imagePath');
+      }
+
+      final originalBytes = await originalFile.readAsBytes();
+
+      if (originalBytes.isEmpty) {
+        throw StateError('Captured file is empty: $imagePath');
+      }
+
+      final decoded = img.decodeImage(originalBytes);
+
+      if (decoded == null) {
+        throw StateError('Could not decode captured image.');
+      }
+
+      final origImage = img.bakeOrientation(decoded);
+
+      debugPrint(
+        'oriented image size: ${origImage.width} x ${origImage.height}',
+      );
+
+      final tmpDir = await getTemporaryDirectory();
+      final orientedPath =
+          '${tmpDir.path}/oriented_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      await File(orientedPath).writeAsBytes(
+        img.encodeJpg(origImage, quality: 95),
+      );
+
+      /* -------- 2. Re-detect QR on oriented still photo -------- */
+      final Barcode? highResQr = await detectQrOnFile(orientedPath);
+
+      final String code =
+          (highResQr?.rawValue ?? previewQr.barcode.rawValue ?? '').trim();
+
+      if (!validTestStripQRCodes.contains(code)) {
+        await showCupertinoDialog(
+          context: context,
+          builder: (_) => CupertinoAlertDialog(
+            title: const Text('Unrecognized Strip'),
+            content: Text('QR code "$code" is not on the approved list.'),
             actions: [
               CupertinoDialogAction(
-                child: const Text('Continue'),
+                child: const Text('OK'),
                 onPressed: () => Navigator.pop(context),
               ),
             ],
           ),
-    );
+        );
+        return;
+      }
 
-    /* --------------- 3.  Auto-crop --------------- */
-    final pts = qr.corners;
-    final xs = pts.map((p) => p.dx).toList();
-    final ys = pts.map((p) => p.dy).toList();
-    final minX = xs.reduce(min), maxX = xs.reduce(max);
-    final minY = ys.reduce(min), maxY = ys.reduce(max);
-    final origBytes = await File(imagePath).readAsBytes();
-    final origImage = img.decodeImage(origBytes)!;
-    final w = maxX - minX, h = maxY - minY;
-
-    const topF = 4.7, bottomF = -2.3, horizF = 0.3;
-    final extTop = (h * topF).round();
-    final extBottom = (h * bottomF).round();
-    final extX = (w * horizF).round();
-
-    final cropX = (minX.round() - extX).clamp(0, origImage.width);
-    final cropW = (w.round() + 2 * extX).clamp(0, origImage.width - cropX);
-    final cropY = (minY.round() - extTop).clamp(0, origImage.height);
-    final cropH = ((maxY.round() + extBottom) - cropY).clamp(
-      0,
-      origImage.height - cropY,
-    );
-
-    final cropped = img.copyCrop(origImage, cropX, cropY, cropW, cropH);
-    final tmpDir = await getTemporaryDirectory();
-    final autoPath =
-        '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    await File(autoPath).writeAsBytes(img.encodeJpg(cropped));
-
-    /* --------------- 4.  Let user tweak crop --------------- */
-    final userCrop = await ImageCropper().cropImage(
-      sourcePath: autoPath,
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: 'Adjust Crop',
-          toolbarColor: CupertinoColors.activeBlue,
-          activeControlsWidgetColor: CupertinoColors.white,
-          lockAspectRatio: false,
-          showCropGrid: true,
+      /* -------- 3. Quick feedback -------- */
+      await showCupertinoDialog(
+        context: context,
+        builder: (_) => CupertinoAlertDialog(
+          title: const Text('Valid Strip Detected'),
+          content: Text(code),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('Continue'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
         ),
-        IOSUiSettings(title: 'Adjust Crop', aspectRatioLockEnabled: false),
-      ],
-    );
-    final finalPath = userCrop?.path ?? autoPath;
+      );
 
-    /* --------------- 5.  Run CNN --------------- */
-    final interpreter = await Interpreter.fromAsset(
-      'assets/new_large_model.tflite',
-    );
-    final inputData = await _preprocessImage(finalPath);
-    final inputTensor = inputData.reshape([1, 256, 256, 1]);
-    final outputTensor = Float32List(1).reshape([1, 1]);
-    interpreter.run(inputTensor, outputTensor);
-    interpreter.close();
+      if (!mounted) return;
 
-    final prob = outputTensor[0][0];
-    final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
-    final conf = (prob * 100).toStringAsFixed(1);
+      /* -------- 4. Choose QR points -------- */
+      final imageSize = Size(
+        origImage.width.toDouble(),
+        origImage.height.toDouble(),
+      );
 
-    /* --------------- 6.  Show result --------------- */
-    if (!mounted) return;
-    Navigator.of(context).push(
-      CupertinoPageRoute(
-        builder:
-            (_) => AnalysisResultFullScreen(
+      late final List<Offset> qrPoints;
+      late final String qrSource;
+
+      if (highResQr != null && highResQr.corners.length >= 4) {
+        qrPoints = _pointsFromBarcode(highResQr);
+        qrSource = 'high-res still photo';
+      } else {
+        qrPoints = _scalePreviewQrToImage(
+          previewQr: previewQr,
+          imageSize: imageSize,
+        );
+        qrSource = 'scaled live-preview fallback';
+      }
+
+      _validateQrPoints(
+        pts: qrPoints,
+        imageSize: imageSize,
+        source: qrSource,
+      );
+
+      /* -------- 5. Auto-crop using your existing crop math -------- */
+      final cropBox = _calculateCropUsingYourExistingMath(
+        pts: qrPoints,
+        image: origImage,
+      );
+
+      debugPrint('QR source: $qrSource');
+      debugPrint('QR points: ${_formatPoints(qrPoints)}');
+      debugPrint('cropBox: $cropBox');
+
+      final cropped = img.copyCrop(
+        origImage,
+        cropBox.x,
+        cropBox.y,
+        cropBox.width,
+        cropBox.height,
+      );
+
+      final autoPath =
+          '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      await File(autoPath).writeAsBytes(
+        img.encodeJpg(cropped, quality: 95),
+      );
+
+      /* -------- 6. Let user tweak crop -------- */
+      final userCrop = await ImageCropper().cropImage(
+        sourcePath: autoPath,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Adjust Crop',
+            toolbarColor: CupertinoColors.activeBlue,
+            activeControlsWidgetColor: CupertinoColors.white,
+            lockAspectRatio: false,
+            showCropGrid: true,
+          ),
+          IOSUiSettings(
+            title: 'Adjust Crop',
+            aspectRatioLockEnabled: false,
+          ),
+        ],
+      );
+
+      final finalPath = userCrop?.path ?? autoPath;
+
+      /* -------- 7. Run CNN -------- */
+      Interpreter? interpreter;
+
+      try {
+        interpreter = await Interpreter.fromAsset(
+          'assets/new_large_model.tflite',
+        );
+
+        final inputData = await _preprocessImage(finalPath);
+        final inputTensor = inputData.reshape([1, 256, 256, 1]);
+        final outputTensor = Float32List(1).reshape([1, 1]);
+
+        interpreter.run(inputTensor, outputTensor);
+
+        final prob = outputTensor[0][0];
+        final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
+        final conf = (prob * 100).toStringAsFixed(1);
+
+        /* -------- 8. Show result -------- */
+        if (!mounted) return;
+
+        Navigator.of(context).push(
+          CupertinoPageRoute(
+            builder: (_) => AnalysisResultFullScreen(
               imagePath: finalPath,
               result: label,
               confidence: conf,
               latitude: latitude,
               longitude: longitude,
             ),
-      ),
-    );
+          ),
+        );
+      } finally {
+        interpreter?.close();
+      }
+    } catch (e, st) {
+      debugPrint('====== _processCapture FAILED ======');
+      debugPrint('$e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+
+      await showCupertinoDialog<void>(
+        context: context,
+        builder: (_) => CupertinoAlertDialog(
+          title: const Text('Image processing failed'),
+          content: Text('$e'),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('OK'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<_LatLng?> _getLocationIfAvailable() async {
+    try {
+      var perm = await Geolocator.checkPermission();
+
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+
+      if (perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always) {
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+
+        return _LatLng(
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+        );
+      }
+    } catch (e) {
+      debugPrint('Location unavailable: $e');
+    }
+
+    return null;
   }
 
   @override
@@ -241,7 +363,9 @@ class _CameraScreenState extends State<CameraScreen> {
       child: SafeArea(
         child: Stack(
           children: [
-            Positioned.fill(child: LiveGuideCamera(onShutter: _processCapture)),
+            Positioned.fill(
+              child: LiveGuideCamera(onShutter: _processCapture),
+            ),
             Positioned(
               bottom: 16,
               right: 16,
@@ -266,6 +390,198 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 }
 
+/* ────────── QR/crop helpers ────────── */
+
+class _LatLng {
+  const _LatLng({
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final double latitude;
+  final double longitude;
+}
+
+class _CropBox {
+  const _CropBox({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+
+  final int x;
+  final int y;
+  final int width;
+  final int height;
+
+  @override
+  String toString() {
+    return 'x=$x, y=$y, width=$width, height=$height';
+  }
+}
+
+List<Offset> _pointsFromBarcode(Barcode barcode) {
+  if (barcode.corners.length < 4) {
+    throw StateError(
+      'Barcode has ${barcode.corners.length} corners instead of 4.',
+    );
+  }
+
+  return barcode.corners
+      .map((p) => Offset(p.dx.toDouble(), p.dy.toDouble()))
+      .toList();
+}
+
+List<Offset> _scalePreviewQrToImage({
+  required LockedQr previewQr,
+  required Size imageSize,
+}) {
+  final captureSize = previewQr.captureSize;
+
+  if (captureSize.width <= 0 || captureSize.height <= 0) {
+    throw StateError(
+      'Cannot use preview fallback because BarcodeCapture.size is invalid: '
+      '$captureSize',
+    );
+  }
+
+  final corners = previewQr.barcode.corners;
+
+  if (corners.length < 4) {
+    throw StateError(
+      'Cannot use preview fallback because preview QR has '
+      '${corners.length} corners instead of 4.',
+    );
+  }
+
+  final scaleX = imageSize.width / captureSize.width;
+  final scaleY = imageSize.height / captureSize.height;
+
+  debugPrint('fallback scaleX=$scaleX scaleY=$scaleY');
+
+  return corners
+      .map((p) => Offset(p.dx * scaleX, p.dy * scaleY))
+      .toList();
+}
+
+_CropBox _calculateCropUsingYourExistingMath({
+  required List<Offset> pts,
+  required img.Image image,
+}) {
+  final xs = pts.map((p) => p.dx).toList();
+  final ys = pts.map((p) => p.dy).toList();
+
+  final minX = xs.reduce(math.min);
+  final maxX = xs.reduce(math.max);
+  final minY = ys.reduce(math.min);
+  final maxY = ys.reduce(math.max);
+
+  final w = maxX - minX;
+  final h = maxY - minY;
+
+  if (w <= 0 || h <= 0) {
+    throw StateError(
+      'Invalid QR box: width=$w height=$h points=${_formatPoints(pts)}',
+    );
+  }
+
+  // Keeping your original crop logic exactly.
+  const double topF = -1.3;
+  const double bottomF = 2.5;
+  const double horizF = 0.1;
+
+  final extTop = (h * topF).round();
+  final extBottom = (h * bottomF).round();
+  final extX = (w * horizF).round();
+
+  final cropX = (minX.round() - extX).clamp(0, image.width).toInt();
+
+  final cropW = (w.round() + 2 * extX)
+      .clamp(0, image.width - cropX)
+      .toInt();
+
+  final cropY = (minY.round() - extTop).clamp(0, image.height).toInt();
+
+  final cropH = ((maxY.round() + extBottom) - cropY)
+      .clamp(0, image.height - cropY)
+      .toInt();
+
+  if (cropW <= 0 || cropH <= 0) {
+    throw StateError(
+      'Invalid crop size. '
+      'cropX=$cropX cropY=$cropY cropW=$cropW cropH=$cropH '
+      'image=${image.width}x${image.height} '
+      'QR points=${_formatPoints(pts)}',
+    );
+  }
+
+  if (cropW < 20 || cropH < 20) {
+    throw StateError(
+      'Crop is suspiciously small. '
+      'cropX=$cropX cropY=$cropY cropW=$cropW cropH=$cropH '
+      'image=${image.width}x${image.height}',
+    );
+  }
+
+  return _CropBox(
+    x: cropX,
+    y: cropY,
+    width: cropW,
+    height: cropH,
+  );
+}
+
+void _validateQrPoints({
+  required List<Offset> pts,
+  required Size imageSize,
+  required String source,
+}) {
+  if (pts.length < 4) {
+    throw StateError('$source QR has fewer than 4 points.');
+  }
+
+  for (final p in pts) {
+    if (!p.dx.isFinite || !p.dy.isFinite) {
+      throw StateError('$source QR has invalid point: $p');
+    }
+  }
+
+  final xs = pts.map((p) => p.dx).toList();
+  final ys = pts.map((p) => p.dy).toList();
+
+  final minX = xs.reduce(math.min);
+  final maxX = xs.reduce(math.max);
+  final minY = ys.reduce(math.min);
+  final maxY = ys.reduce(math.max);
+
+  debugPrint(
+    '$source QR bbox: '
+    'minX=$minX maxX=$maxX minY=$minY maxY=$maxY '
+    'image=${imageSize.width}x${imageSize.height}',
+  );
+
+  final completelyOutside = maxX < 0 ||
+      maxY < 0 ||
+      minX > imageSize.width ||
+      minY > imageSize.height;
+
+  if (completelyOutside) {
+    throw StateError(
+      '$source QR points are completely outside the image. '
+      'This usually means preview coordinates were not scaled correctly '
+      'or the photo orientation does not match the preview. '
+      'points=${_formatPoints(pts)} image=$imageSize',
+    );
+  }
+}
+
+String _formatPoints(List<Offset> pts) {
+  return pts
+      .map((p) => '(${p.dx.toStringAsFixed(1)}, ${p.dy.toStringAsFixed(1)})')
+      .join(', ');
+}
+
 /// Full-screen view of the analysis result.
 class AnalysisResultFullScreen extends StatelessWidget {
   final String imagePath;
@@ -284,18 +600,20 @@ class AnalysisResultFullScreen extends StatelessWidget {
   });
 
   Future<void> _save(BuildContext ctx) async {
-    // 1) Local save (unchanged)
     final prefs = await SharedPreferences.getInstance();
     final dir = await getApplicationDocumentsDirectory();
     final saveDir = Directory('${dir.path}/saved_tests');
-    if (!await saveDir.exists()) await saveDir.create(recursive: true);
+
+    if (!await saveDir.exists()) {
+      await saveDir.create(recursive: true);
+    }
 
     final ts = DateTime.now().millisecondsSinceEpoch;
     final fname = 'test_$ts.jpg';
     final newPath = '${saveDir.path}/$fname';
+
     await File(imagePath).copy(newPath);
 
-    // ✅ 1.5) Save to camera roll
     try {
       await GallerySaver.saveImage(newPath, albumName: 'LFIA Tests');
     } catch (e) {
@@ -309,11 +627,11 @@ class AnalysisResultFullScreen extends StatelessWidget {
       'latitude': latitude,
       'longitude': longitude,
     };
+
     final raw = prefs.getStringList('saved_tests') ?? [];
     raw.add(jsonEncode(entry));
     await prefs.setStringList('saved_tests', raw);
 
-    // 2) Cloud save (new)
     try {
       await FirebaseFirestore.instance.collection('test_results').add({
         'result': result,
@@ -321,32 +639,27 @@ class AnalysisResultFullScreen extends StatelessWidget {
         'latitude': latitude,
         'longitude': longitude,
       });
-      // You can also log or handle the returned DocumentReference if needed
     } catch (e) {
-      // For now, just print the error; you may choose to show a dialog later
       debugPrint('Firestore save failed: $e');
     }
 
-    // 3) Confirmation dialog (unchanged)
     await showCupertinoDialog(
       context: ctx,
-      builder:
-          (_) => CupertinoAlertDialog(
-            title: const Text('Saved'),
-            content: const Text('Image, result & location saved.'),
-            actions: [
-              CupertinoDialogAction(
-                child: const Text('OK'),
-                onPressed: () => Navigator.pop(ctx),
-              ),
-            ],
+      builder: (_) => CupertinoAlertDialog(
+        title: const Text('Saved'),
+        content: const Text('Image, result & location saved.'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('OK'),
+            onPressed: () => Navigator.pop(ctx),
           ),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Access latitude & longitude safely
     final double? lat = latitude;
     final double? lon = longitude;
 
@@ -369,9 +682,7 @@ class AnalysisResultFullScreen extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.w700,
-                  color:
-                      CupertinoColors
-                          .label, // <- force readable label color (black in light mode)
+                  color: CupertinoColors.label,
                 ),
               ),
               const SizedBox(height: 4),
@@ -379,7 +690,6 @@ class AnalysisResultFullScreen extends StatelessWidget {
                 'Confidence: $confidence%',
                 style: const TextStyle(color: CupertinoColors.systemGrey),
               ),
-
               const SizedBox(height: 8),
               if (lat != null && lon != null) ...[
                 Text(
@@ -413,7 +723,9 @@ class AnalysisResultFullScreen extends StatelessWidget {
                 child: const Text('Learn More'),
                 onPressed: () {
                   Navigator.of(context).push(
-                    CupertinoPageRoute(builder: (_) => const LearnMoreScreen()),
+                    CupertinoPageRoute(
+                      builder: (_) => const LearnMoreScreen(),
+                    ),
                   );
                 },
               ),
@@ -432,7 +744,7 @@ class AnalysisResultFullScreen extends StatelessWidget {
   }
 }
 
-/// AnalysisResultScreen without location data (shortcut flow)
+/// AnalysisResultScreen without location data.
 class AnalysisResultScreen extends StatelessWidget {
   final String imagePath;
   final String result;
@@ -446,23 +758,30 @@ class AnalysisResultScreen extends StatelessWidget {
   });
 
   Future<void> _save(BuildContext ctx) async {
-    // 1) Local save (unchanged)…
     final prefs = await SharedPreferences.getInstance();
     final dir = await getApplicationDocumentsDirectory();
     final saveDir = Directory('${dir.path}/saved_tests');
-    if (!await saveDir.exists()) await saveDir.create(recursive: true);
+
+    if (!await saveDir.exists()) {
+      await saveDir.create(recursive: true);
+    }
 
     final ts = DateTime.now().millisecondsSinceEpoch;
     final fname = 'test_$ts.jpg';
     final newPath = '${saveDir.path}/$fname';
+
     await File(imagePath).copy(newPath);
 
-    final entry = {'path': newPath, 'result': result, 'timestamp': ts};
+    final entry = {
+      'path': newPath,
+      'result': result,
+      'timestamp': ts,
+    };
+
     final raw = prefs.getStringList('saved_tests') ?? [];
     raw.add(jsonEncode(entry));
     await prefs.setStringList('saved_tests', raw);
 
-    // 2) Cloud save
     try {
       await FirebaseFirestore.instance.collection('test_results').add({
         'result': result,
@@ -472,27 +791,25 @@ class AnalysisResultScreen extends StatelessWidget {
       debugPrint('Firestore save failed: $e');
     }
 
-    // 3) Confirmation dialog (unchanged)…
     await showCupertinoDialog(
       context: ctx,
-      builder:
-          (_) => CupertinoAlertDialog(
-            title: const Text('Saved'),
-            content: const Text('Image & result saved.'),
-            actions: [
-              CupertinoDialogAction(
-                child: const Text('OK'),
-                onPressed: () => Navigator.pop(ctx),
-              ),
-            ],
+      builder: (_) => CupertinoAlertDialog(
+        title: const Text('Saved'),
+        content: const Text('Image & result saved.'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('OK'),
+            onPressed: () => Navigator.pop(ctx),
           ),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(middle: const Text('Result')),
+      navigationBar: const CupertinoNavigationBar(middle: Text('Result')),
       child: SafeArea(
         child: Center(
           child: Column(
@@ -512,7 +829,6 @@ class AnalysisResultScreen extends StatelessWidget {
                   color: CupertinoColors.label,
                 ),
               ),
-
               const SizedBox(height: 16),
               CupertinoButton.filled(
                 child: const Text('Save Photo & Result'),
@@ -531,10 +847,12 @@ class AnalysisResultScreen extends StatelessWidget {
   }
 }
 
-/// DisplayPictureScreen (manual crop + analyze)
+/// DisplayPictureScreen manual crop + analyze.
 class DisplayPictureScreen extends StatefulWidget {
   final String imagePath;
+
   const DisplayPictureScreen({super.key, required this.imagePath});
+
   @override
   _DisplayPictureScreenState createState() => _DisplayPictureScreenState();
 }
@@ -553,29 +871,37 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
   }
 
   Future<void> _saveResult() async {
-    // 1) Local save (unchanged) …
     final prefs = await SharedPreferences.getInstance();
     final dir = await getApplicationDocumentsDirectory();
     final saveDir = Directory('${dir.path}/saved_tests');
-    if (!await saveDir.exists()) await saveDir.create(recursive: true);
+
+    if (!await saveDir.exists()) {
+      await saveDir.create(recursive: true);
+    }
 
     final ts = DateTime.now().millisecondsSinceEpoch;
     final fname = 'test_$ts.jpg';
     final newPath = '${saveDir.path}/$fname';
-    await File(widget.imagePath).copy(newPath);
 
-    // 2) Get location if available (you already have lat, lon)
+    final pathToSave = _croppedPath ?? widget.imagePath;
+    await File(pathToSave).copy(newPath);
+
     double? lat;
     double? lon;
+
     try {
       var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied)
+
+      if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
+      }
+
       if (perm == LocationPermission.whileInUse ||
           perm == LocationPermission.always) {
         final pos = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
         );
+
         lat = pos.latitude;
         lon = pos.longitude;
       }
@@ -588,11 +914,11 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
       'latitude': lat,
       'longitude': lon,
     };
+
     final raw = prefs.getStringList('saved_tests') ?? [];
     raw.add(jsonEncode(entry));
     await prefs.setStringList('saved_tests', raw);
 
-    // 3) Cloud save
     try {
       await FirebaseFirestore.instance.collection('test_results').add({
         'result': _result,
@@ -604,20 +930,20 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
       debugPrint('Firestore save failed: $e');
     }
 
-    // 4) Confirmation dialog (unchanged) …
+    if (!mounted) return;
+
     showCupertinoDialog(
       context: context,
-      builder:
-          (_) => CupertinoAlertDialog(
-            title: const Text('Saved'),
-            content: const Text('Image, result & location saved.'),
-            actions: [
-              CupertinoDialogAction(
-                child: const Text('OK'),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
+      builder: (_) => CupertinoAlertDialog(
+        title: const Text('Saved'),
+        content: const Text('Image, result & location saved.'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('OK'),
+            onPressed: () => Navigator.of(context).pop(),
           ),
+        ],
+      ),
     );
   }
 
@@ -644,6 +970,7 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
         ),
       ],
     );
+
     if (cropped != null) {
       setState(() {
         _croppedPath = cropped.path;
@@ -654,25 +981,32 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
 
   Future<void> _runModel(String path) async {
     setState(() => _busy = true);
+
     try {
       _interpreter = await Interpreter.fromAsset(
         'assets/new_large_model.tflite',
       );
+
       final inputData = await _preprocessImage(path);
       final input = inputData.reshape([1, 256, 256, 1]);
       final output = Float32List(1).reshape([1, 1]);
+
       _interpreter!.run(input, output);
+
       final prob = output[0][0];
       final conf = (prob * 100).toStringAsFixed(1);
       final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
       final lowC =
           prob > _optimalThreshold - 0.1 && prob < _optimalThreshold + 0.1;
+
       setState(() {
         _result =
             lowC ? '$label\n(Low confidence: $conf%)' : '$label\n($conf%)';
         _busy = false;
       });
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Manual model failed: $e');
+
       setState(() {
         _result = 'Error analyzing image';
         _busy = false;
@@ -740,13 +1074,12 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
                     horizontal: 24,
                     vertical: 12,
                   ),
-                  onPressed:
-                      (_croppedPath != null && !_busy)
-                          ? () => _runModel(_croppedPath!)
-                          : null,
-                  child: Row(
+                  onPressed: (_croppedPath != null && !_busy)
+                      ? () => _runModel(_croppedPath!)
+                      : null,
+                  child: const Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children: [
                       Icon(
                         CupertinoIcons.chart_bar,
                         size: 20,
@@ -780,10 +1113,11 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
 }
 
 // ───────────────────────────────────────────────────────────────
-// Detail view for full photo (robust to missing/corrupt files)
+// Detail view for full photo.
 // ───────────────────────────────────────────────────────────────
 class SavedTestDetailScreen extends StatelessWidget {
   final Map<String, dynamic> entry;
+
   const SavedTestDetailScreen({super.key, required this.entry});
 
   @override
@@ -793,14 +1127,15 @@ class SavedTestDetailScreen extends StatelessWidget {
     final formatted =
         "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} "
         "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
+
     final double? lat = entry['latitude'] as double?;
     final double? lon = entry['longitude'] as double?;
 
     final path = (entry['path'] as String?) ?? '';
     final file = File(path);
 
-    // Build the main image with a safe fallback
     Widget bigImage;
+
     if (path.isEmpty || !file.existsSync()) {
       bigImage = const _MissingFilePlaceholder();
     } else {
@@ -832,7 +1167,7 @@ class SavedTestDetailScreen extends StatelessWidget {
               child: Column(
                 children: [
                   Text(
-                    entry['result'],
+                    entry['result'].toString(),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 20,
@@ -848,7 +1183,8 @@ class SavedTestDetailScreen extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       'Location: ${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}',
-                      style: const TextStyle(color: CupertinoColors.systemGrey),
+                      style:
+                          const TextStyle(color: CupertinoColors.systemGrey),
                     ),
                   ],
                 ],
@@ -867,10 +1203,11 @@ class SavedTestDetailScreen extends StatelessWidget {
 }
 
 // ───────────────────────────────────────────────────────────────
-// Screen listing saved tests (guard navigation + thumbnail fallback)
+// Screen listing saved tests.
 // ───────────────────────────────────────────────────────────────
 class SavedTestsScreen extends StatefulWidget {
   const SavedTestsScreen({super.key});
+
   @override
   _SavedTestsScreenState createState() => _SavedTestsScreenState();
 }
@@ -887,27 +1224,34 @@ class _SavedTestsScreenState extends State<SavedTestsScreen> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList('saved_tests') ?? [];
+
     setState(() {
-      _entries = raw.map((e) => jsonDecode(e) as Map<String, dynamic>).toList();
+      _entries = raw
+          .map((e) => jsonDecode(e) as Map<String, dynamic>)
+          .toList();
     });
   }
 
   Future<void> _delete(int i) async {
     final prefs = await SharedPreferences.getInstance();
-    // delete the image file if present
+
     final path = (_entries[i]['path'] as String?) ?? '';
+
     if (path.isNotEmpty) {
       final f = File(path);
+
       if (await f.exists()) {
         try {
           await f.delete();
         } catch (_) {}
       }
     }
-    // remove entry
+
     _entries.removeAt(i);
+
     final raw = _entries.map(jsonEncode).toList();
     await prefs.setStringList('saved_tests', raw);
+
     setState(() {});
   }
 
@@ -919,86 +1263,87 @@ class _SavedTestsScreenState extends State<SavedTestsScreen> {
         transitionBetweenRoutes: false,
       ),
       child: SafeArea(
-        child:
-            _entries.isEmpty
-                ? const Center(child: Text('No saved tests.'))
-                : ListView.builder(
-                  itemCount: _entries.length,
-                  itemBuilder: (context, i) {
-                    final e = _entries[i];
+        child: _entries.isEmpty
+            ? const Center(child: Text('No saved tests.'))
+            : ListView.builder(
+                itemCount: _entries.length,
+                itemBuilder: (context, i) {
+                  final e = _entries[i];
 
-                    final ts = e['timestamp'] as int;
-                    final date = DateTime.fromMillisecondsSinceEpoch(ts);
-                    final formattedDate =
-                        "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} "
-                        "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
-                    final double? lat = e['latitude'] as double?;
-                    final double? lon = e['longitude'] as double?;
-                    final subtitleText =
-                        (lat != null && lon != null)
-                            ? '$formattedDate · (${lat.toStringAsFixed(3)}, ${lon.toStringAsFixed(3)})'
-                            : formattedDate;
+                  final ts = e['timestamp'] as int;
+                  final date = DateTime.fromMillisecondsSinceEpoch(ts);
 
-                    return GestureDetector(
-                      onTap: () async {
-                        final path = (e['path'] as String?) ?? '';
-                        if (path.isEmpty || !File(path).existsSync()) {
-                          await showCupertinoDialog(
-                            context: context,
-                            builder:
-                                (_) => CupertinoAlertDialog(
-                                  title: const Text('File not found'),
-                                  content: const Text(
-                                    'This saved image is missing or unreadable.',
-                                  ),
-                                  actions: [
-                                    CupertinoDialogAction(
-                                      isDestructiveAction: true,
-                                      child: const Text('Remove entry'),
-                                      onPressed: () async {
-                                        Navigator.pop(context);
-                                        await _delete(i);
-                                      },
-                                    ),
-                                    CupertinoDialogAction(
-                                      isDefaultAction: true,
-                                      child: const Text('OK'),
-                                      onPressed: () => Navigator.pop(context),
-                                    ),
-                                  ],
-                                ),
-                          );
-                          return;
-                        }
-                        Navigator.of(context).push(
-                          CupertinoPageRoute(
-                            builder: (_) => SavedTestDetailScreen(entry: e),
+                  final formattedDate =
+                      "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} "
+                      "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
+
+                  final double? lat = e['latitude'] as double?;
+                  final double? lon = e['longitude'] as double?;
+
+                  final subtitleText = (lat != null && lon != null)
+                      ? '$formattedDate · (${lat.toStringAsFixed(3)}, ${lon.toStringAsFixed(3)})'
+                      : formattedDate;
+
+                  return GestureDetector(
+                    onTap: () async {
+                      final path = (e['path'] as String?) ?? '';
+
+                      if (path.isEmpty || !File(path).existsSync()) {
+                        await showCupertinoDialog(
+                          context: context,
+                          builder: (_) => CupertinoAlertDialog(
+                            title: const Text('File not found'),
+                            content: const Text(
+                              'This saved image is missing or unreadable.',
+                            ),
+                            actions: [
+                              CupertinoDialogAction(
+                                isDestructiveAction: true,
+                                child: const Text('Remove entry'),
+                                onPressed: () async {
+                                  Navigator.pop(context);
+                                  await _delete(i);
+                                },
+                              ),
+                              CupertinoDialogAction(
+                                child: const Text('Cancel'),
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ],
                           ),
                         );
-                      },
-                      child: CupertinoListTile(
-                        leading: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.file(
-                            File(e['path']),
-                            width: 50,
-                            height: 50,
-                            fit: BoxFit.cover,
-                            errorBuilder:
-                                (ctx, err, stack) => const _ThumbFallback(),
-                          ),
+                        return;
+                      }
+
+                      Navigator.of(context).push(
+                        CupertinoPageRoute(
+                          builder: (_) => SavedTestDetailScreen(entry: e),
                         ),
-                        title: Text(e['result'].toString().split('\n').first),
-                        subtitle: Text(subtitleText),
-                        trailing: CupertinoButton(
-                          padding: EdgeInsets.zero,
-                          child: const Icon(CupertinoIcons.delete),
-                          onPressed: () => _delete(i),
+                      );
+                    },
+                    child: CupertinoListTile(
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.file(
+                          File(e['path']),
+                          width: 50,
+                          height: 50,
+                          fit: BoxFit.cover,
+                          errorBuilder: (ctx, err, stack) =>
+                              const _ThumbFallback(),
                         ),
                       ),
-                    );
-                  },
-                ),
+                      title: Text(e['result'].toString().split('\n').first),
+                      subtitle: Text(subtitleText),
+                      trailing: CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        child: const Icon(CupertinoIcons.delete),
+                        onPressed: () => _delete(i),
+                      ),
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -1017,9 +1362,9 @@ class _MissingFilePlaceholder extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0x11000000)),
       ),
-      child: Column(
+      child: const Column(
         mainAxisSize: MainAxisSize.min,
-        children: const [
+        children: [
           Icon(
             CupertinoIcons.photo_fill,
             size: 36,

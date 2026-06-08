@@ -1,6 +1,6 @@
 // lib/live_guide_camera.dart
 import 'dart:math';
-import 'dart:ui'; // for ImageFilter (glass blur)
+import 'dart:ui'; // for ImageFilter and Size
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -8,9 +8,20 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:camera/camera.dart';
 
+class LockedQr {
+  const LockedQr({
+    required this.barcode,
+    required this.captureSize,
+  });
+
+  final Barcode barcode;
+  final Size captureSize;
+}
+
 class LiveGuideCamera extends StatefulWidget {
   const LiveGuideCamera({super.key, required this.onShutter});
-  final Future<void> Function(String imagePath, Barcode qr) onShutter;
+
+  final Future<void> Function(String imagePath, LockedQr qr) onShutter;
 
   @override
   State<LiveGuideCamera> createState() => _LiveGuideCameraState();
@@ -22,13 +33,12 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
     formats: [BarcodeFormat.qrCode],
     detectionSpeed: DetectionSpeed.unrestricted,
     detectionTimeoutMs: 0,
-    returnImage:
-        false, // keep preview fast – we’ll grab one still photo separately
+    returnImage: false,
   );
 
   /* distance band */
   static const double _minFill = 0.35;
-  static const double _maxFill = 0.63;
+  static const double _maxFill = 0.75;
 
   /* auto-capture */
   static const int _framesToLock = 40;
@@ -42,7 +52,7 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
   bool _torch = false;
 
   /* temp */
-  Barcode? _qr;
+  LockedQr? _qr;
   bool _paused = false;
 
   /* ────────── build ────────── */
@@ -65,77 +75,91 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
 
   /* preview + QR logic */
   Widget _scannerView(double w, double h) => MobileScanner(
-    controller: _scanner,
-    onDetect: (cap) {
-      // 1) first QR with value
-      final qr = cap.barcodes.firstWhere(
-        (b) => b.rawValue != null,
-        orElse: () => Barcode(rawValue: null),
+        controller: _scanner,
+        onDetect: (cap) {
+          if (_auto) return;
+
+          Barcode? qr;
+          for (final b in cap.barcodes) {
+            if (b.rawValue != null) {
+              qr = b;
+              break;
+            }
+          }
+
+          if (qr == null) return _reset('Point at QR');
+          if (qr.corners.length < 4) return _reset('Point at QR');
+
+          final xs = qr.corners.map((p) => p.dx);
+          final ys = qr.corners.map((p) => p.dy);
+
+          final qrW = xs.reduce(max) - xs.reduce(min);
+          final qrH = ys.reduce(max) - ys.reduce(min);
+
+          if (qrW <= 0 || qrH <= 0) return _reset('Point at QR');
+
+          final fill = (qrW * qrH) / (w * h);
+
+          if (fill < _minFill) return _reset('Move closer');
+          if (fill > _maxFill) return _reset('Move back');
+
+          _qr = LockedQr(
+            barcode: qr,
+            captureSize: cap.size,
+          );
+
+          _goodFrames++;
+
+          if (_goodFrames >= _framesToLock) {
+            _updateHint('Hold still', dots: _repeat('●', _framesToLock));
+
+            _auto = true;
+            HapticFeedback.mediumImpact();
+            _snap();
+          } else {
+            _updateHint('Hold still', dots: _dots(_goodFrames));
+          }
+        },
       );
-      if (qr.rawValue == null) return _reset('Point at QR');
-
-      // 2) size-in-frame check
-      final xs = qr.corners.map((p) => p.dx);
-      final ys = qr.corners.map((p) => p.dy);
-      final fill =
-          ((xs.reduce(max) - xs.reduce(min)) *
-              (ys.reduce(max) - ys.reduce(min))) /
-          (w * h);
-
-      if (fill < _minFill) return _reset('Move closer');
-      if (fill > _maxFill) return _reset('Move back');
-
-      // 3) good frame
-      _qr = qr;
-      _goodFrames++;
-
-      if (_goodFrames >= _framesToLock) {
-        _updateHint('Hold still', dots: '●' * _framesToLock);
-        if (!_auto) {
-          _auto = true;
-          HapticFeedback.mediumImpact();
-          _snap();
-        }
-      } else {
-        _updateHint('Hold still', dots: _dots(_goodFrames));
-      }
-    },
-  );
 
   /* flash toggle */
   Widget _flash() => Positioned(
-    top: 16,
-    right: 16,
-    child: CupertinoButton(
-      padding: const EdgeInsets.all(12),
-      borderRadius: BorderRadius.circular(24),
-      color: Colors.black45,
-      child: Icon(
-        _torch ? CupertinoIcons.bolt_fill : CupertinoIcons.bolt_slash_fill,
-        color: CupertinoColors.white,
-        size: 24,
-      ),
-      onPressed: () async {
-        await _scanner.toggleTorch();
-        setState(() => _torch = !_torch);
-      },
-    ),
-  );
+        top: 16,
+        right: 16,
+        child: CupertinoButton(
+          padding: const EdgeInsets.all(12),
+          borderRadius: BorderRadius.circular(24),
+          color: Colors.black45,
+          child: Icon(
+            _torch
+                ? CupertinoIcons.bolt_fill
+                : CupertinoIcons.bolt_slash_fill,
+            color: CupertinoColors.white,
+            size: 24,
+          ),
+          onPressed: () async {
+            await _scanner.toggleTorch();
+            if (mounted) {
+              setState(() => _torch = !_torch);
+            }
+          },
+        ),
+      );
 
-  /* manual shutter (still available) */
+  /* manual shutter */
   Widget _shutter() => Align(
-    alignment: Alignment.bottomCenter,
-    child: CupertinoButton(
-      padding: const EdgeInsets.all(20),
-      color: CupertinoColors.activeBlue,
-      child: const Icon(
-        CupertinoIcons.camera,
-        color: CupertinoColors.white,
-        size: 28,
-      ),
-      onPressed: _snap,
-    ),
-  );
+        alignment: Alignment.bottomCenter,
+        child: CupertinoButton(
+          padding: const EdgeInsets.all(20),
+          color: CupertinoColors.activeBlue,
+          child: const Icon(
+            CupertinoIcons.camera,
+            color: CupertinoColors.white,
+            size: 28,
+          ),
+          onPressed: _snap,
+        ),
+      );
 
   /* ────────── capture ────────── */
   Future<void> _snap() async {
@@ -144,36 +168,84 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
       return;
     }
 
-    // 1) freeze preview
-    await _scanner.stop();
-    _paused = true;
+    CameraController? ctrl;
 
-    // 2) single still with the camera plugin
-    final cams = await availableCameras();
-    final cam = cams.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.back,
-      orElse: () => cams.first,
-    );
-    final ctrl = CameraController(
-      cam,
-      ResolutionPreset.medium, // speed vs quality
-      enableAudio: false,
-    );
-    await ctrl.initialize();
-    final XFile shot = await ctrl.takePicture();
-    await ctrl.dispose();
+    try {
+      final good = _qr!;
 
-    final good = _qr!;
+      await _scanner.stop();
+      _paused = true;
 
-    // 3) reset & hand off
-    _reset('Point at QR');
-    await widget.onShutter(shot.path, good);
+      final cams = await availableCameras();
+      final cam = cams.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cams.first,
+      );
+
+      ctrl = CameraController(
+        cam,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+
+      await ctrl.initialize();
+
+      try {
+        await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      } catch (e) {
+        debugPrint('Could not lock capture orientation: $e');
+      }
+
+      final XFile shot = await ctrl.takePicture();
+
+      await widget.onShutter(shot.path, good);
+
+      _reset('Point at QR');
+    } catch (e, st) {
+      debugPrint('====== _snap FAILED ======');
+      debugPrint('$e');
+      debugPrint('$st');
+
+      try {
+        if (_paused) {
+          await _scanner.start();
+          _paused = false;
+        }
+      } catch (scannerError) {
+        debugPrint('Could not restart scanner after failure: $scannerError');
+      }
+
+      if (mounted) {
+        await showCupertinoDialog<void>(
+          context: context,
+          builder: (_) => CupertinoAlertDialog(
+            title: const Text('Capture failed'),
+            content: Text('$e'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+
+      _reset('Point at QR');
+    } finally {
+      try {
+        await ctrl?.dispose();
+      } catch (_) {}
+
+      _auto = false;
+    }
   }
 
   /* resume scanner when we pop back */
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+
     final current = ModalRoute.of(context)?.isCurrent ?? false;
     if (current && _paused) {
       _scanner.start();
@@ -189,28 +261,49 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
     _updateHint(msg);
   }
 
-  String _dots(int filled) => '●' * filled + '○' * (_framesToLock - filled);
+  String _repeat(String value, int count) {
+    if (count <= 0) return '';
+    return List.filled(count, value).join();
+  }
 
-  void _updateHint(String main, {String dots = ''}) => setState(() {
-    _main = main;
-    _sub = dots;
-    _ready = main == 'Hold still';
-  });
+  String _dots(int filled) {
+    final safeFilled = filled.clamp(0, _framesToLock);
+    final empty = _framesToLock - safeFilled;
+    return _repeat('●', safeFilled) + _repeat('○', empty);
+  }
+
+  void _updateHint(String main, {String dots = ''}) {
+    if (!mounted) return;
+
+    setState(() {
+      _main = main;
+      _sub = dots;
+      _ready = main == 'Hold still';
+    });
+  }
+
+  @override
+  void dispose() {
+    _scanner.dispose();
+    super.dispose();
+  }
 }
 
-/* hint pill (now with “glass” blur) */
+/* hint pill */
 class _HintPill extends StatelessWidget {
   const _HintPill({
     required this.main,
     required this.sub,
     required this.highlight,
   });
+
   final String main, sub;
   final bool highlight;
 
   @override
   Widget build(BuildContext ctx) {
     final size = MediaQuery.of(ctx).size;
+
     return Positioned(
       top: size.height * .05,
       left: 0,
@@ -245,10 +338,9 @@ class _HintPill extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.w600,
-                        color:
-                            highlight
-                                ? CupertinoColors.systemGreen
-                                : CupertinoColors.white,
+                        color: highlight
+                            ? CupertinoColors.systemGreen
+                            : CupertinoColors.white,
                         shadows: const [
                           Shadow(blurRadius: 6, color: Colors.black54),
                         ],
@@ -283,49 +375,49 @@ class _GuideOverlay extends StatelessWidget {
     required this.guideH,
     required this.highlight,
   });
+
   final double guideW, guideH;
   final bool highlight;
 
   @override
   Widget build(BuildContext context) => Positioned.fill(
-    child: Column(
-      children: [
-        Expanded(
-          child: DecoratedBox(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter, // top band fades downward
-                end: Alignment.topCenter,
-                colors: [Colors.black54, Colors.transparent],
+        child: Column(
+          children: [
+            Expanded(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [Colors.black54, Colors.transparent],
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-        Container(
-          width: guideW,
-          height: guideH,
-          decoration: BoxDecoration(
-            border: Border.all(
-              color:
-                  highlight
+            Container(
+              width: guideW,
+              height: guideH,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: highlight
                       ? CupertinoColors.systemGreen
                       : CupertinoColors.white,
-              width: 3,
-            ),
-          ),
-        ),
-        Expanded(
-          child: DecoratedBox(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter, // bottom band fades upward
-                end: Alignment.bottomCenter,
-                colors: [Colors.black54, Colors.transparent],
+                  width: 3,
+                ),
               ),
             ),
-          ),
+            Expanded(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black54, Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 }
