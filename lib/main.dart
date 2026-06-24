@@ -149,6 +149,14 @@ class _CameraScreenState extends State<CameraScreen> {
       }
 
       final origImage = img.bakeOrientation(decoded);
+      
+      //// fixed orientation logic 
+img.Image fixedImage = origImage;
+
+if (fixedImage.width > fixedImage.height) {
+  fixedImage = img.copyRotate(fixedImage, 90);
+}
+      // new line ends
 
       debugPrint(
         'oriented image size: ${origImage.width} x ${origImage.height}',
@@ -158,8 +166,9 @@ class _CameraScreenState extends State<CameraScreen> {
       final orientedPath =
           '${tmpDir.path}/oriented_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
+// fixed orientation
       await File(orientedPath).writeAsBytes(
-        img.encodeJpg(origImage, quality: 95),
+        img.encodeJpg(fixedImage, quality: 95),
       );
 
       /* -------- 2. Re-detect QR on oriented still photo -------- */
@@ -203,24 +212,96 @@ class _CameraScreenState extends State<CameraScreen> {
       if (!mounted) return;
 
       /* -------- 4. Choose QR points -------- */
+      // fixed orientation to portrait
       final imageSize = Size(
-        origImage.width.toDouble(),
-        origImage.height.toDouble(),
+        fixedImage.width.toDouble(),
+        fixedImage.height.toDouble(),
       );
 
       late final List<Offset> qrPoints;
       late final String qrSource;
 
-      if (highResQr != null && highResQr.corners.length >= 4) {
-        qrPoints = _pointsFromBarcode(highResQr);
-        qrSource = 'high-res still photo';
-      } else {
-        qrPoints = _scalePreviewQrToImage(
-          previewQr: previewQr,
-          imageSize: imageSize,
-        );
-        qrSource = 'scaled live-preview fallback';
-      }
+     if (highResQr != null && highResQr.corners.length >= 4) {
+  qrPoints = _pointsFromBarcode(highResQr);
+  qrSource = 'high-res still photo';
+} else {
+  debugPrint('WARNING: highResQr failed. Using safe center crop instead.');
+
+  final safeCrop = _centerCropBox(origImage);
+
+  final cropped = img.copyCrop(
+    fixedImage, // fixed orientation
+    safeCrop.x,
+    safeCrop.y,
+    safeCrop.width,
+    safeCrop.height,
+  );
+
+  final tmpDir = await getTemporaryDirectory();
+  final autoPath =
+      '${tmpDir.path}/safe_center_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  await File(autoPath).writeAsBytes(
+    img.encodeJpg(cropped, quality: 95),
+  );
+
+  final userCrop = await ImageCropper().cropImage(
+    sourcePath: autoPath,
+    uiSettings: [
+      AndroidUiSettings(
+        toolbarTitle: 'Adjust Crop',
+        toolbarColor: CupertinoColors.activeBlue,
+        activeControlsWidgetColor: CupertinoColors.white,
+        lockAspectRatio: false,
+        showCropGrid: true,
+      ),
+      IOSUiSettings(
+        title: 'Adjust Crop',
+        aspectRatioLockEnabled: false,
+      ),
+    ],
+  );
+
+  final finalPath = userCrop?.path ?? autoPath;
+
+  // continue directly to CNN from here
+  Interpreter? interpreter;
+
+  try {
+    interpreter = await Interpreter.fromAsset(
+      'assets/new_large_model.tflite',
+    );
+
+    final inputData = await _preprocessImage(finalPath);
+    final inputTensor = inputData.reshape([1, 256, 256, 1]);
+    final outputTensor = Float32List(1).reshape([1, 1]);
+
+    interpreter.run(inputTensor, outputTensor);
+
+    final prob = outputTensor[0][0];
+    final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
+    final conf = (prob * 100).toStringAsFixed(1);
+
+    if (!mounted) return;
+
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (_) => AnalysisResultFullScreen(
+          imagePath: finalPath,
+          result: label,
+          confidence: conf,
+          latitude: latitude,
+          longitude: longitude,
+        ),
+      ),
+    );
+  } finally {
+    interpreter?.close();
+  }
+
+  return;
+}
+
 
       _validateQrPoints(
         pts: qrPoints,
@@ -231,7 +312,7 @@ class _CameraScreenState extends State<CameraScreen> {
       /* -------- 5. Auto-crop using your existing crop math -------- */
       final cropBox = _calculateCropUsingYourExistingMath(
         pts: qrPoints,
-        image: origImage,
+        image: fixedImage,
       );
 
       debugPrint('QR source: $qrSource');
@@ -239,12 +320,13 @@ class _CameraScreenState extends State<CameraScreen> {
       debugPrint('cropBox: $cropBox');
 
       final cropped = img.copyCrop(
-        origImage,
+        fixedImage,
         cropBox.x,
         cropBox.y,
         cropBox.width,
         cropBox.height,
       );
+      
 
       final autoPath =
           '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -464,6 +546,22 @@ List<Offset> _scalePreviewQrToImage({
       .map((p) => Offset(p.dx * scaleX, p.dy * scaleY))
       .toList();
 }
+
+_CropBox _centerCropBox(img.Image image) {
+  final cropW = (image.width * 0.7).round();
+  final cropH = (image.height * 0.7).round();
+
+  final cropX = ((image.width - cropW) / 2).round();
+  final cropY = ((image.height - cropH) / 2).round();
+
+  return _CropBox(
+    x: cropX,
+    y: cropY,
+    width: cropW,
+    height: cropH,
+  );
+}
+
 
 _CropBox _calculateCropUsingYourExistingMath({
   required List<Offset> pts,

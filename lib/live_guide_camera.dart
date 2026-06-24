@@ -181,17 +181,21 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cams.first,
       );
-
+// resolution is changed from medium to high
       ctrl = CameraController(
         cam,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
       );
 
       await ctrl.initialize();
 
       try {
-        await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
+        await SystemChrome.setPreferredOrientations([
+  DeviceOrientation.portraitUp,
+]);
+
+await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
       } catch (e) {
         debugPrint('Could not lock capture orientation: $e');
       }
