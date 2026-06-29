@@ -43,3 +43,9 @@ android {
 flutter {
     source = "../.."
 }
+
+// Added dependency for OpenCV
+dependencies {
+    implementation(project(":OpenCV"))
+}
+

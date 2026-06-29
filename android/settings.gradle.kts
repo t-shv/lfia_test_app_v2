@@ -26,3 +26,4 @@ plugins {
 }
 
 include(":app")
+include(":OpenCV") // new for opencv compilation
