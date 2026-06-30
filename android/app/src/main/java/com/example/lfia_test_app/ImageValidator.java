@@ -316,4 +316,6 @@ public class ImageValidator {
         String lower = filename.toLowerCase(Locale.US);
         return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg");
     }
+
+    
 }

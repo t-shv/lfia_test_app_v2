@@ -19,7 +19,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:gal/gal.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart'
-    show SystemChrome, SystemUiOverlayStyle;
+    show SystemChrome, SystemUiOverlayStyle, MethodChannel; //new methodChannel import for opencv connection
+
 
 import 'live_guide_camera.dart';
 import 'learn_more_screen.dart';
@@ -31,6 +32,19 @@ const validTestStripQRCodes = <String>{
   'COV-19-TS-0000020-0915',
   'COV-19-TS-0000109-1219',
 };
+
+// Method channel for opencv connection
+const MethodChannel _opencvChannel = MethodChannel('lfia/opencv');
+
+Future<Map<String, dynamic>> _checkImageQualityWithOpenCV(String imagePath) async {
+  final result = await _opencvChannel.invokeMethod<Map<dynamic, dynamic>>(
+    'checkImageQuality',
+    {'imagePath': imagePath},
+  );
+
+  return Map<String, dynamic>.from(result ?? {});
+}
+
 
 /// Preprocess image to match CNN input requirements
 Future<Float32List> _preprocessImage(String path) async {
@@ -264,6 +278,49 @@ if (fixedImage.width > fixedImage.height) {
 
   final finalPath = userCrop?.path ?? autoPath;
 
+
+//opencv call starts/////////////////////////////////
+
+final quality = await _checkImageQualityWithOpenCV(finalPath);
+
+debugPrint('OpenCV quality result: $quality');
+
+final usable = quality['usable'] == true;
+final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
+final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
+
+if (!usable && mounted) {
+  final continueAnyway = await showCupertinoDialog<bool>(
+    context: context,
+    builder: (_) => CupertinoAlertDialog(
+      title: const Text('Image Quality Warning'),
+      content: Text(
+        'Contrast/Exposure: $contrastExposure\n'
+        'Blurriness: $blurriness\n\n'
+        'Retaking the photo is recommended.',
+      ),
+      actions: [
+        CupertinoDialogAction(
+          isDestructiveAction: true,
+          child: const Text('Retake'),
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        CupertinoDialogAction(
+          child: const Text('Continue Anyway'),
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    ),
+  );
+
+  if (continueAnyway != true) {
+    return;
+  }
+}
+// opencv call ends///////////////////////////////
+
+  
+
   // continue directly to CNN from here
   Interpreter? interpreter;
 
@@ -355,6 +412,45 @@ if (fixedImage.width > fixedImage.height) {
 
       final finalPath = userCrop?.path ?? autoPath;
 
+//openCV call
+  final quality = await _checkImageQualityWithOpenCV(finalPath);
+
+debugPrint('OpenCV quality result: $quality');
+
+final usable = quality['usable'] == true;
+final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
+final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
+
+if (!usable && mounted) {
+  final continueAnyway = await showCupertinoDialog<bool>(
+    context: context,
+    builder: (_) => CupertinoAlertDialog(
+      title: const Text('Image Quality Warning'),
+      content: Text(
+        'Contrast/Exposure: $contrastExposure\n'
+        'Blurriness: $blurriness\n\n'
+        'Retaking the photo is recommended.',
+      ),
+      actions: [
+        CupertinoDialogAction(
+          isDestructiveAction: true,
+          child: const Text('Retake'),
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        CupertinoDialogAction(
+          child: const Text('Continue Anyway'),
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    ),
+  );
+
+  if (continueAnyway != true) {
+    return;
+  }
+}
+
+// opencv  call ends <--
       /* -------- 7. Run CNN -------- */
       Interpreter? interpreter;
 
