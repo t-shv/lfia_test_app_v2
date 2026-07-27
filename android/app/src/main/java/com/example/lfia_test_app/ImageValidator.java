@@ -97,17 +97,24 @@ public class ImageValidator {
         Imgproc.calcHist(Arrays.asList(img), new MatOfInt(0), new Mat(), hist, new MatOfInt(256), new MatOfFloat(0, 256));
 
         double totalPixels = (double) img.rows() * (double) img.cols();
+        /* 
         double extremePixels = (hist.get(0,0)[0] + hist.get(255,0)[0]) / totalPixels;
 
         double midRangeSum = 0.0;
         for (int i = 10; i <= 245; i++) {
             midRangeSum += hist.get(i,0)[0];
         }
+
+        
         double midRangeRatio = midRangeSum / totalPixels;
 
-        boolean lowContrast = stdDevValue < 20.0;
-        boolean extreme = extremePixels > 0.15;
-        boolean weakMid = midRangeRatio < 0.4;
+         Log.d(TAG, "stdDevValue = " + stdDevValue);
+         Log.d(TAG, "extremePixels = " + extremePixels);
+         Log.d(TAG, "midRangeRatio = " + midRangeRatio);
+        
+        boolean lowContrast = stdDevValue < 15.0;
+        boolean extreme = extremePixels > 0.25;
+        boolean weakMid = midRangeRatio < 0.30;
 
         img.release();
         hist.release();
@@ -116,7 +123,42 @@ public class ImageValidator {
             return "Unacceptable";
         } else {
             return "Acceptable";
-        }
+        } */
+
+            double veryDarkPixels = 0.0;
+double veryBrightPixels = 0.0;
+
+// Count nearly black pixels: 0–5
+for (int i = 0; i <= 5; i++) {
+    veryDarkPixels += hist.get(i, 0)[0];
+}
+
+// Count nearly white/clipped pixels: 250–255
+for (int i = 250; i <= 255; i++) {
+    veryBrightPixels += hist.get(i, 0)[0];
+}
+
+double darkRatio = veryDarkPixels / totalPixels;
+double brightRatio = veryBrightPixels / totalPixels;
+
+Log.d(TAG, "stdDevValue = " + stdDevValue);
+Log.d(TAG, "darkRatio = " + darkRatio);
+Log.d(TAG, "brightRatio = " + brightRatio);
+
+// Only reject severe underexposure or severe flash/highlight clipping
+boolean severelyDark = darkRatio > 0.60;
+boolean severeFlash = brightRatio > 0.70;
+
+img.release();
+hist.release();
+mean.release();
+stddev.release();
+
+if (severelyDark || severeFlash) {
+    return "Unacceptable";
+} else {
+    return "Acceptable";
+}
     }
 
     // tuning for best results
@@ -124,7 +166,7 @@ public class ImageValidator {
     private static final boolean USE_CENTER_ROI = false;
     private static final double  ROI_FRACTION  = 0.55;
     private static final int LAPL_KSIZE = 3;
-    private static final double  BLURRINESS_THRESH = 90.0; // decision threshold --> good precision of blurriness and clarity
+    private static final double  BLURRINESS_THRESH = 30.0; // decision threshold --> good precision of blurriness and clarity
 
 
     public static String checkBlurriness(String imagePath) {
