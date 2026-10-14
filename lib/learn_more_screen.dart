@@ -6,7 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class LearnMoreScreen extends StatefulWidget {
-  const LearnMoreScreen({Key? key}) : super(key: key);
+  const LearnMoreScreen({super.key});
 
   @override
   State<LearnMoreScreen> createState() => _LearnMoreScreenState();

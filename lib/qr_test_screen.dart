@@ -7,6 +7,8 @@ import 'qr_scanner.dart'; // your helper
 class QRTestScreen extends StatelessWidget {
   final List<String> ids = ['TS-0001', 'TS-0002', 'TS-0003'];
 
+  const QRTestScreen({super.key});
+
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(

@@ -152,12 +152,12 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         child: CupertinoButton(
           padding: const EdgeInsets.all(20),
           color: CupertinoColors.activeBlue,
+          onPressed: _snap,
           child: const Icon(
             CupertinoIcons.camera,
             color: CupertinoColors.white,
             size: 28,
           ),
-          onPressed: _snap,
         ),
       );
 
@@ -326,10 +326,10 @@ class _HintPill extends StatelessWidget {
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.25),
+                  color: Colors.black.withValues(alpha: .25),
                   borderRadius: BorderRadius.circular(28),
                   border: Border.all(
-                    color: Colors.white.withOpacity(.08),
+                    color: Colors.white.withValues(alpha: .08),
                     width: 1,
                   ),
                 ),

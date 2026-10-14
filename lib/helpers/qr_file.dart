@@ -1,5 +1,4 @@
 // lib/helpers/qr_file.dart
-import 'dart:io';
 import 'dart:ui' show Offset;                                   // <-- add
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart'
     as mlkit;
@@ -23,9 +22,7 @@ Future<Barcode?> detectQrOnFile(String path) async {
 
   return Barcode(
   rawValue: ml.rawValue,
-  corners: ml.cornerPoints == null
-      ? <Offset>[]
-      : ml.cornerPoints!
+  corners: ml.cornerPoints
           .map((p) => Offset(p.x.toDouble(), p.y.toDouble()))
           .toList(),
   format:  BarcodeFormat.qrCode,
