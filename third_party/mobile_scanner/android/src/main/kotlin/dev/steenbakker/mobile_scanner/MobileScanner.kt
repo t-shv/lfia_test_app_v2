@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
@@ -42,6 +43,7 @@ import dev.steenbakker.mobile_scanner.objects.DetectionSpeed
 import dev.steenbakker.mobile_scanner.objects.MobileScannerErrorCodes
 import dev.steenbakker.mobile_scanner.objects.MobileScannerStartParameters
 import dev.steenbakker.mobile_scanner.utils.YuvToRgbConverter
+import dev.steenbakker.mobile_scanner.utils.YuvByteBuffer
 import dev.steenbakker.mobile_scanner.utils.serialize
 import io.flutter.view.TextureRegistry
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +89,21 @@ class MobileScanner(
     private var isPaused = false
     private val nativeFrameBaselineLogged = AtomicBoolean(false)
     private val nativeBarcodePositiveCount = AtomicInteger(0)
+    private val retainedFrameLock = Any()
+    private var retainedFrame: RetainedYuvFrame? = null
+    private var retentionInProgress = false
+    private var retentionSessionId = 0L
+    private var retentionSessionActive = false
+
+    private data class RetainedYuvFrame(
+        val bytes: ByteArray,
+        val width: Int,
+        val height: Int,
+        val rotationDegrees: Int,
+        val sourceFormat: Int,
+        val bufferFormat: Int,
+        val timestamp: Long,
+    )
 
     companion object {
         // Configure the `ProcessCameraProvider` to only log errors.
@@ -149,6 +166,10 @@ class MobileScanner(
         }
 
         scanner?.let {
+            val frameSessionId = synchronized(retainedFrameLock) {
+                if (retentionSessionActive) retentionSessionId else null
+            }
+
             it.process(inputImage).addOnSuccessListener { barcodes ->
                 if (detectionSpeed == DetectionSpeed.NO_DUPLICATES) {
                     val newScannedBarcodes = barcodes.mapNotNull {
@@ -184,6 +205,10 @@ class MobileScanner(
                 if (barcodeMap.isEmpty()) {
                     imageProxy.close()
                     return@addOnSuccessListener
+                }
+
+                if (frameSessionId != null) {
+                    retainFirstYuvFrame(imageProxy, mediaImage, frameSessionId)
                 }
 
                 val positiveCount = nativeBarcodePositiveCount.incrementAndGet()
@@ -275,6 +300,117 @@ class MobileScanner(
                 scannerTimeout = false
             }, detectionTimeout)
         }
+    }
+
+    @ExperimentalGetImage
+    private fun retainFirstYuvFrame(
+        imageProxy: ImageProxy,
+        mediaImage: android.media.Image,
+        sessionId: Long,
+    ) {
+        synchronized(retainedFrameLock) {
+            if (!retentionSessionActive || retentionSessionId != sessionId ||
+                retainedFrame != null || retentionInProgress
+            ) {
+                return
+            }
+            retentionInProgress = true
+        }
+
+        val copyStartNanos = System.nanoTime()
+        var ownedBytes: ByteArray? = null
+        var retained = false
+        var width = -1
+        var height = -1
+        var rotationDegrees = -1
+        var sourceFormat = -1
+
+        try {
+            width = imageProxy.width
+            height = imageProxy.height
+            rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            sourceFormat = imageProxy.format
+            val planes = imageProxy.planes
+
+            require(sourceFormat == ImageFormat.YUV_420_888) {
+                "unsupported image format $sourceFormat"
+            }
+            require(width >= 2 && height >= 2 && width % 2 == 0 && height % 2 == 0) {
+                "invalid YUV dimensions ${width}x${height}"
+            }
+            require(planes.size >= 3) {
+                "expected 3 YUV planes, got ${planes.size}"
+            }
+            planes.forEachIndexed { index, plane ->
+                require(plane.rowStride > 0 && plane.pixelStride > 0) {
+                    "invalid plane $index stride"
+                }
+                require(plane.buffer.capacity() > 0) {
+                    "empty plane $index buffer"
+                }
+            }
+
+            val yuv = YuvByteBuffer(mediaImage)
+            val ownedBuffer = yuv.buffer.duplicate()
+            ownedBuffer.rewind()
+            val copiedBytes = ByteArray(ownedBuffer.remaining())
+            ownedBuffer.get(copiedBytes)
+            ownedBytes = copiedBytes
+
+            val retainedFrame = RetainedYuvFrame(
+                bytes = copiedBytes,
+                width = width,
+                height = height,
+                rotationDegrees = rotationDegrees,
+                sourceFormat = sourceFormat,
+                bufferFormat = yuv.type,
+                timestamp = imageProxy.imageInfo.timestamp,
+            )
+
+            synchronized(retainedFrameLock) {
+                if (retentionSessionActive && retentionSessionId == sessionId &&
+                    this.retainedFrame == null
+                ) {
+                    this.retainedFrame = retainedFrame
+                    retained = true
+                }
+            }
+
+            if (!retained) {
+                ownedBytes.fill(0)
+            }
+
+            val durationMicros = (System.nanoTime() - copyStartNanos) / 1_000L
+            Log.d(
+                "MobileScanner",
+                "[NATIVE_FRAME_RETENTION] " +
+                    "success=$retained copy_duration_us=$durationMicros " +
+                    "bytes=${copiedBytes.size} width=$width height=$height " +
+                    "rotation_degrees=$rotationDegrees " +
+                    "source_format=$sourceFormat buffer_format=${yuv.type}",
+            )
+        } catch (exception: Exception) {
+            ownedBytes?.fill(0)
+            val durationMicros = (System.nanoTime() - copyStartNanos) / 1_000L
+            Log.d(
+                "MobileScanner",
+                "[NATIVE_FRAME_RETENTION] success=false copy_duration_us=$durationMicros " +
+                    "bytes=${ownedBytes?.size ?: 0} width=$width height=$height " +
+                    "rotation_degrees=$rotationDegrees source_format=$sourceFormat " +
+                    "reason=${exception.message ?: exception.javaClass.simpleName}",
+            )
+        } finally {
+            synchronized(retainedFrameLock) {
+                if (retentionSessionId == sessionId) {
+                    retentionInProgress = false
+                }
+            }
+        }
+    }
+
+    private fun clearRetainedFrameLocked() {
+        retainedFrame?.bytes?.fill(0)
+        retainedFrame = null
     }
 
     /**
@@ -441,6 +577,12 @@ class MobileScanner(
 
         lastScanned = null
         scanner = barcodeScannerFactory(barcodeScannerOptions)
+        synchronized(retainedFrameLock) {
+            clearRetainedFrameLocked()
+            retentionSessionId += 1
+            retentionSessionActive = true
+            retentionInProgress = false
+        }
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
         val executor = ContextCompat.getMainExecutor(activity)
@@ -647,6 +789,12 @@ class MobileScanner(
         scanner?.close()
         scanner = null
         lastScanned = null
+        synchronized(retainedFrameLock) {
+            retentionSessionActive = false
+            retentionSessionId += 1
+            retentionInProgress = false
+            clearRetainedFrameLocked()
+        }
     }
 
     private fun isStopped() = camera == null && preview == null
@@ -770,6 +918,12 @@ class MobileScanner(
      */
     fun dispose() {
         if (isStopped()) {
+            synchronized(retainedFrameLock) {
+                retentionSessionActive = false
+                retentionSessionId += 1
+                retentionInProgress = false
+                clearRetainedFrameLocked()
+            }
             return
         }
 
