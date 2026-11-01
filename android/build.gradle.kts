@@ -1,3 +1,4 @@
+
 plugins {
     id("com.google.gms.google-services") version "4.3.15" apply false
 }
@@ -5,7 +6,6 @@ plugins {
 import org.gradle.api.tasks.Delete
 import com.android.build.gradle.LibraryExtension
 import org.gradle.kotlin.dsl.*
-
 
 allprojects {
     repositories {
@@ -18,15 +18,28 @@ allprojects {
 buildDir = file("../build")
 
 subprojects {
-    // ─── Nest each subproject’s build dir under ../build/<moduleName> ───
+    // ─── Nest each subproject's build dir under ../build/<moduleName> ───
     buildDir = rootProject.file("../build/${project.name}")
 
-    // ─── Inject a default namespace into any library module (AGP 8+ requirement) ───
+    // ─── Configure Android library modules ───
     afterEvaluate {
         if (plugins.hasPlugin("com.android.library")) {
+
+            val isTfliteFlutter = name == "tflite_flutter"
+
             extensions.configure<LibraryExtension> {
+
+                // Inject a default namespace (AGP 8+ requirement)
                 if (namespace.isNullOrBlank()) {
                     namespace = name.replace("-", ".")
+                }
+
+                // Fix Java/Kotlin JVM target mismatch for TensorFlow Lite
+                if (isTfliteFlutter) {
+                    compileOptions {
+                        sourceCompatibility = JavaVersion.VERSION_17
+                        targetCompatibility = JavaVersion.VERSION_17
+                    }
                 }
             }
         }

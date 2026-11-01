@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'qr_scanner.dart'; // your helper
 
 class QRTestScreen extends StatelessWidget {
-  final List<String> ids = ['TS-0001', 'TS-0002', 'TS-0003'];
+  final List<String> ids = const ['TS-0001', 'TS-0002', 'TS-0003', 'COV-19-TS-0000116-1219'];
 
   const QRTestScreen({super.key});
 

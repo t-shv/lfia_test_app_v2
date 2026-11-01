@@ -29,8 +29,8 @@ import 'learn_more_screen.dart';
 const validTestStripQRCodes = <String>{
   'TS-0001',
   'COV-19-TS-0000020-1219',
-  'COV-19-TS-0000020-0915',
-  'COV-19-TS-0000109-1219',
+  'COV-19-TS-0000020-0915'
+  'COV-19-TS-0000116-1219',
 };
 
 // Method channel for opencv connection
