@@ -1,4 +1,5 @@
-// lib/live_guide_camera.dart
+
+ // lib/live_guide_camera.dart
 import 'dart:math';
 import 'dart:ui'; // for ImageFilter and Size
 
@@ -44,6 +45,8 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
   static const int _framesToLock = 40;
   int _goodFrames = 0;
   bool _auto = false;
+  Stopwatch? _validSequenceClock;
+  Stopwatch? _fromLockClock;
 
   /* ui */
   String _main = 'Point at QR';
@@ -54,6 +57,7 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
   /* temp */
   LockedQr? _qr;
   bool _paused = false;
+  bool _frameLogged = false; // Log only the first live frame for diagnostics.
 
   /* ────────── build ────────── */
   @override
@@ -78,6 +82,14 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         controller: _scanner,
         onDetect: (cap) {
           if (_auto) return;
+
+          // Diagnostic: confirm that mobile_scanner provides image bytes.
+          if (!_frameLogged && cap.image != null) {
+            _frameLogged = true;
+            debugPrint('====== LIVE FRAME RECEIVED ======');
+            debugPrint('Image bytes: ${cap.image!.length}');
+            debugPrint('Capture size: ${cap.size.width} x ${cap.size.height}');
+          }
 
           Barcode? qr;
           for (final b in cap.barcodes) {
@@ -108,9 +120,15 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
             captureSize: cap.size,
           );
 
+          _validSequenceClock ??= Stopwatch()..start();
           _goodFrames++;
 
           if (_goodFrames >= _framesToLock) {
+            final validSequenceMs = _validSequenceClock!.elapsedMilliseconds;
+            _fromLockClock = Stopwatch()..start();
+            debugPrint(
+              '[CAMERA_BASELINE] first_valid_to_40th_valid_ms=$validSequenceMs',
+            );
             _updateHint('Hold still', dots: _repeat('●', _framesToLock));
 
             _auto = true;
@@ -173,10 +191,22 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
     try {
       final good = _qr!;
 
+      final captureClock = _fromLockClock ?? (Stopwatch()..start());
+
+      final stopClock = Stopwatch()..start();
       await _scanner.stop();
+      stopClock.stop();
+      debugPrint(
+        '[CAMERA_BASELINE] stop_mobile_scanner_ms=${stopClock.elapsedMilliseconds}',
+      );
       _paused = true;
 
+      final camerasClock = Stopwatch()..start();
       final cams = await availableCameras();
+      camerasClock.stop();
+      debugPrint(
+        '[CAMERA_BASELINE] available_cameras_ms=${camerasClock.elapsedMilliseconds}',
+      );
       final cam = cams.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cams.first,
@@ -188,7 +218,12 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         enableAudio: false,
       );
 
+      final initializeClock = Stopwatch()..start();
       await ctrl.initialize();
+      initializeClock.stop();
+      debugPrint(
+        '[CAMERA_BASELINE] camera_controller_initialize_ms=${initializeClock.elapsedMilliseconds}',
+      );
 
       try {
         await SystemChrome.setPreferredOrientations([
@@ -200,9 +235,20 @@ await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
         debugPrint('Could not lock capture orientation: $e');
       }
 
+      final takePictureClock = Stopwatch()..start();
       final XFile shot = await ctrl.takePicture();
+      takePictureClock.stop();
+      debugPrint(
+        '[CAMERA_BASELINE] take_picture_ms=${takePictureClock.elapsedMilliseconds}',
+      );
+      debugPrint(
+        '[CAMERA_BASELINE] 40th_valid_to_photo_available_ms=${captureClock.elapsedMilliseconds}',
+      );
 
       await widget.onShutter(shot.path, good);
+      debugPrint(
+        '[CAMERA_BASELINE] 40th_valid_to_on_shutter_return_ms=${captureClock.elapsedMilliseconds}',
+      );
 
       _reset('Point at QR');
     } catch (e, st) {
@@ -262,6 +308,8 @@ await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
     _goodFrames = 0;
     _auto = false;
     _qr = null;
+    _validSequenceClock = null;
+    _fromLockClock = null;
     _updateHint(msg);
   }
 
@@ -272,7 +320,7 @@ await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
 
   String _dots(int filled) {
     final safeFilled = filled.clamp(0, _framesToLock);
-    final empty = _framesToLock - safeFilled;
+    final empty = _framesToLock - filled.clamp(0, _framesToLock);
     return _repeat('●', safeFilled) + _repeat('○', empty);
   }
 

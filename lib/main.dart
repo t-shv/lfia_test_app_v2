@@ -128,6 +128,8 @@ class _CameraScreenState extends State<CameraScreen> {
   static const double _optimalThreshold = 0.5955;
 
   Future<void> _processCapture(String imagePath, LockedQr previewQr) async {
+    final processClock = Stopwatch()..start();
+    debugPrint('[PROCESS_BASELINE] process_start path=$imagePath');
     try {
       debugPrint('====== _processCapture START ======');
       debugPrint('imagePath: $imagePath');
@@ -137,61 +139,90 @@ class _CameraScreenState extends State<CameraScreen> {
       );
 
       /* -------- 0. Location -------- */
-      final location = await _getLocationIfAvailable();
-      final latitude = location?.latitude;
-      final longitude = location?.longitude;
+      const double? latitude = null;
+      const double? longitude = null;
+      debugPrint('[PROCESS_BASELINE] location_lookup_skipped=true');
 
       if (!mounted) return;
 
       /* -------- 1. Decode and orient the still photo -------- */
       final originalFile = File(imagePath);
 
+      final existsClock = Stopwatch()..start();
       if (!await originalFile.exists()) {
         throw StateError('Captured file does not exist: $imagePath');
       }
+      existsClock.stop();
+      debugPrint('[PROCESS_BASELINE] image_exists_check_ms=${existsClock.elapsedMilliseconds}');
 
+      final loadClock = Stopwatch()..start();
       final originalBytes = await originalFile.readAsBytes();
+      loadClock.stop();
+      debugPrint('[PROCESS_BASELINE] image_load_ms=${loadClock.elapsedMilliseconds} bytes=${originalBytes.length}');
 
       if (originalBytes.isEmpty) {
         throw StateError('Captured file is empty: $imagePath');
       }
 
+      final decodeClock = Stopwatch()..start();
       final decoded = img.decodeImage(originalBytes);
+      decodeClock.stop();
+      debugPrint('[PROCESS_BASELINE] image_decode_ms=${decodeClock.elapsedMilliseconds}');
 
       if (decoded == null) {
         throw StateError('Could not decode captured image.');
       }
 
+      final orientationClock = Stopwatch()..start();
       final origImage = img.bakeOrientation(decoded);
+      orientationClock.stop();
+      debugPrint('[PROCESS_BASELINE] image_orientation_ms=${orientationClock.elapsedMilliseconds}');
       
       //// fixed orientation logic 
 img.Image fixedImage = origImage;
 
+final rotationClock = Stopwatch()..start();
 if (fixedImage.width > fixedImage.height) {
   fixedImage = img.copyRotate(fixedImage, 90);
 }
+rotationClock.stop();
+debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMilliseconds}');
       // new line ends
 
       debugPrint(
         'oriented image size: ${origImage.width} x ${origImage.height}',
       );
 
+      final tmpDirClock = Stopwatch()..start();
       final tmpDir = await getTemporaryDirectory();
+      tmpDirClock.stop();
+      debugPrint('[PROCESS_BASELINE] temporary_directory_ms=${tmpDirClock.elapsedMilliseconds}');
       final orientedPath =
           '${tmpDir.path}/oriented_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
 // fixed orientation
+      final orientedSaveClock = Stopwatch()..start();
       await File(orientedPath).writeAsBytes(
         img.encodeJpg(fixedImage, quality: 95),
       );
+      orientedSaveClock.stop();
+      debugPrint('[PROCESS_BASELINE] oriented_image_save_ms=${orientedSaveClock.elapsedMilliseconds}');
 
       /* -------- 2. Re-detect QR on oriented still photo -------- */
+      final qrRedetectClock = Stopwatch()..start();
       final Barcode? highResQr = await detectQrOnFile(orientedPath);
+      qrRedetectClock.stop();
+      debugPrint('[PROCESS_BASELINE] qr_redetection_ms=${qrRedetectClock.elapsedMilliseconds} found=${highResQr != null}');
 
+      final qrValidationClock = Stopwatch()..start();
       final String code =
           (highResQr?.rawValue ?? previewQr.barcode.rawValue ?? '').trim();
+      final validCode = validTestStripQRCodes.contains(code);
+      qrValidationClock.stop();
+      debugPrint('[PROCESS_BASELINE] qr_validation_ms=${qrValidationClock.elapsedMilliseconds} valid=$validCode code=$code');
 
-      if (!validTestStripQRCodes.contains(code)) {
+      if (!validCode) {
+        final dialogClock = Stopwatch()..start();
         await showCupertinoDialog(
           context: context,
           builder: (_) => CupertinoAlertDialog(
@@ -205,10 +236,13 @@ if (fixedImage.width > fixedImage.height) {
             ],
           ),
         );
+        dialogClock.stop();
+        debugPrint('[PROCESS_BASELINE] invalid_qr_dialog_wait_ms=${dialogClock.elapsedMilliseconds}');
         return;
       }
 
       /* -------- 3. Quick feedback -------- */
+      final validDialogClock = Stopwatch()..start();
       await showCupertinoDialog(
         context: context,
         builder: (_) => CupertinoAlertDialog(
@@ -222,6 +256,8 @@ if (fixedImage.width > fixedImage.height) {
           ],
         ),
       );
+      validDialogClock.stop();
+      debugPrint('[PROCESS_BASELINE] valid_qr_dialog_wait_ms=${validDialogClock.elapsedMilliseconds}');
 
       if (!mounted) return;
 
@@ -241,8 +277,12 @@ if (fixedImage.width > fixedImage.height) {
 } else {
   debugPrint('WARNING: highResQr failed. Using safe center crop instead.');
 
+  final safeCropCalculationClock = Stopwatch()..start();
   final safeCrop = _centerCropBox(origImage);
+  safeCropCalculationClock.stop();
+  debugPrint('[PROCESS_BASELINE] safe_crop_calculation_ms=${safeCropCalculationClock.elapsedMilliseconds}');
 
+  final safeCropCopyClock = Stopwatch()..start();
   final cropped = img.copyCrop(
     fixedImage, // fixed orientation
     safeCrop.x,
@@ -250,7 +290,10 @@ if (fixedImage.width > fixedImage.height) {
     safeCrop.width,
     safeCrop.height,
   );
+  safeCropCopyClock.stop();
+  debugPrint('[PROCESS_BASELINE] safe_crop_copy_ms=${safeCropCopyClock.elapsedMilliseconds}');
 
+  final safeCropSaveClock = Stopwatch()..start();
   final tmpDir = await getTemporaryDirectory();
   final autoPath =
       '${tmpDir.path}/safe_center_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -258,7 +301,11 @@ if (fixedImage.width > fixedImage.height) {
   await File(autoPath).writeAsBytes(
     img.encodeJpg(cropped, quality: 95),
   );
+  safeCropSaveClock.stop();
+  debugPrint('[PROCESS_BASELINE] safe_crop_save_ms=${safeCropSaveClock.elapsedMilliseconds}');
 
+  debugPrint('[PROCESS_BASELINE] safe_ucrop_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
+  final safeUcropClock = Stopwatch()..start();
   final userCrop = await ImageCropper().cropImage(
     sourcePath: autoPath,
     uiSettings: [
@@ -275,13 +322,18 @@ if (fixedImage.width > fixedImage.height) {
       ),
     ],
   );
+  safeUcropClock.stop();
+  debugPrint('[PROCESS_BASELINE] safe_ucrop_wait_and_return_ms=${safeUcropClock.elapsedMilliseconds}');
 
   final finalPath = userCrop?.path ?? autoPath;
 
 
 //opencv call starts/////////////////////////////////
 
+final safeOpenCvClock = Stopwatch()..start();
 final quality = await _checkImageQualityWithOpenCV(finalPath);
+safeOpenCvClock.stop();
+debugPrint('[PROCESS_BASELINE] safe_opencv_quality_ms=${safeOpenCvClock.elapsedMilliseconds}');
 
 debugPrint('OpenCV quality result: $quality');
 
@@ -290,6 +342,7 @@ final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
 final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
 
 if (!usable && mounted) {
+  final safeQualityDialogClock = Stopwatch()..start();
   final continueAnyway = await showCupertinoDialog<bool>(
     context: context,
     builder: (_) => CupertinoAlertDialog(
@@ -312,6 +365,8 @@ if (!usable && mounted) {
       ],
     ),
   );
+  safeQualityDialogClock.stop();
+  debugPrint('[PROCESS_BASELINE] safe_quality_warning_dialog_wait_ms=${safeQualityDialogClock.elapsedMilliseconds}');
 
   if (continueAnyway != true) {
     return;
@@ -325,15 +380,24 @@ if (!usable && mounted) {
   Interpreter? interpreter;
 
   try {
+    final safeModelLoadClock = Stopwatch()..start();
     interpreter = await Interpreter.fromAsset(
       'assets/new_large_model.tflite',
     );
+    safeModelLoadClock.stop();
+    debugPrint('[PROCESS_BASELINE] safe_cnn_model_load_ms=${safeModelLoadClock.elapsedMilliseconds}');
 
+    final safePreprocessClock = Stopwatch()..start();
     final inputData = await _preprocessImage(finalPath);
+    safePreprocessClock.stop();
+    debugPrint('[PROCESS_BASELINE] safe_cnn_preprocess_ms=${safePreprocessClock.elapsedMilliseconds}');
     final inputTensor = inputData.reshape([1, 256, 256, 1]);
     final outputTensor = Float32List(1).reshape([1, 1]);
 
+    final safeInferenceClock = Stopwatch()..start();
     interpreter.run(inputTensor, outputTensor);
+    safeInferenceClock.stop();
+    debugPrint('[PROCESS_BASELINE] safe_cnn_inference_ms=${safeInferenceClock.elapsedMilliseconds}');
 
     final prob = outputTensor[0][0];
     final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
@@ -341,6 +405,7 @@ if (!usable && mounted) {
 
     if (!mounted) return;
 
+    debugPrint('[PROCESS_BASELINE] safe_result_screen_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
     Navigator.of(context).push(
       CupertinoPageRoute(
         builder: (_) => AnalysisResultFullScreen(
@@ -360,22 +425,29 @@ if (!usable && mounted) {
 }
 
 
+      final cropPointValidationClock = Stopwatch()..start();
       _validateQrPoints(
         pts: qrPoints,
         imageSize: imageSize,
         source: qrSource,
       );
+      cropPointValidationClock.stop();
+      debugPrint('[PROCESS_BASELINE] qr_crop_point_validation_ms=${cropPointValidationClock.elapsedMilliseconds}');
 
       /* -------- 5. Auto-crop using your existing crop math -------- */
+      final cropCalculationClock = Stopwatch()..start();
       final cropBox = _calculateCropUsingYourExistingMath(
         pts: qrPoints,
         image: fixedImage,
       );
+      cropCalculationClock.stop();
+      debugPrint('[PROCESS_BASELINE] automatic_crop_calculation_ms=${cropCalculationClock.elapsedMilliseconds}');
 
       debugPrint('QR source: $qrSource');
       debugPrint('QR points: ${_formatPoints(qrPoints)}');
       debugPrint('cropBox: $cropBox');
 
+      final cropCopyClock = Stopwatch()..start();
       final cropped = img.copyCrop(
         fixedImage,
         cropBox.x,
@@ -383,16 +455,23 @@ if (!usable && mounted) {
         cropBox.width,
         cropBox.height,
       );
+      cropCopyClock.stop();
+      debugPrint('[PROCESS_BASELINE] automatic_crop_copy_ms=${cropCopyClock.elapsedMilliseconds}');
       
 
       final autoPath =
           '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
+      final cropSaveClock = Stopwatch()..start();
       await File(autoPath).writeAsBytes(
         img.encodeJpg(cropped, quality: 95),
       );
+      cropSaveClock.stop();
+      debugPrint('[PROCESS_BASELINE] automatic_crop_save_ms=${cropSaveClock.elapsedMilliseconds}');
 
       /* -------- 6. Let user tweak crop -------- */
+      debugPrint('[PROCESS_BASELINE] ucrop_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
+      final ucropClock = Stopwatch()..start();
       final userCrop = await ImageCropper().cropImage(
         sourcePath: autoPath,
         uiSettings: [
@@ -409,11 +488,16 @@ if (!usable && mounted) {
           ),
         ],
       );
+      ucropClock.stop();
+      debugPrint('[PROCESS_BASELINE] ucrop_wait_and_return_ms=${ucropClock.elapsedMilliseconds}');
 
       final finalPath = userCrop?.path ?? autoPath;
 
 //openCV call
+  final openCvClock = Stopwatch()..start();
   final quality = await _checkImageQualityWithOpenCV(finalPath);
+  openCvClock.stop();
+  debugPrint('[PROCESS_BASELINE] opencv_quality_ms=${openCvClock.elapsedMilliseconds}');
 
 debugPrint('OpenCV quality result: $quality');
 
@@ -422,6 +506,7 @@ final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
 final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
 
 if (!usable && mounted) {
+  final qualityDialogClock = Stopwatch()..start();
   final continueAnyway = await showCupertinoDialog<bool>(
     context: context,
     builder: (_) => CupertinoAlertDialog(
@@ -444,6 +529,8 @@ if (!usable && mounted) {
       ],
     ),
   );
+  qualityDialogClock.stop();
+  debugPrint('[PROCESS_BASELINE] quality_warning_dialog_wait_ms=${qualityDialogClock.elapsedMilliseconds}');
 
   if (continueAnyway != true) {
     return;
@@ -455,15 +542,24 @@ if (!usable && mounted) {
       Interpreter? interpreter;
 
       try {
+        final modelLoadClock = Stopwatch()..start();
         interpreter = await Interpreter.fromAsset(
           'assets/new_large_model.tflite',
         );
+        modelLoadClock.stop();
+        debugPrint('[PROCESS_BASELINE] cnn_model_load_ms=${modelLoadClock.elapsedMilliseconds}');
 
+        final preprocessClock = Stopwatch()..start();
         final inputData = await _preprocessImage(finalPath);
+        preprocessClock.stop();
+        debugPrint('[PROCESS_BASELINE] cnn_preprocess_ms=${preprocessClock.elapsedMilliseconds}');
         final inputTensor = inputData.reshape([1, 256, 256, 1]);
         final outputTensor = Float32List(1).reshape([1, 1]);
 
+        final inferenceClock = Stopwatch()..start();
         interpreter.run(inputTensor, outputTensor);
+        inferenceClock.stop();
+        debugPrint('[PROCESS_BASELINE] cnn_inference_ms=${inferenceClock.elapsedMilliseconds}');
 
         final prob = outputTensor[0][0];
         final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
@@ -472,6 +568,7 @@ if (!usable && mounted) {
         /* -------- 8. Show result -------- */
         if (!mounted) return;
 
+        debugPrint('[PROCESS_BASELINE] result_screen_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
         Navigator.of(context).push(
           CupertinoPageRoute(
             builder: (_) => AnalysisResultFullScreen(
@@ -490,6 +587,7 @@ if (!usable && mounted) {
       debugPrint('====== _processCapture FAILED ======');
       debugPrint('$e');
       debugPrint('$st');
+      debugPrint('[PROCESS_BASELINE] process_failed_elapsed_ms=${processClock.elapsedMilliseconds}');
 
       if (!mounted) return;
 
@@ -837,11 +935,14 @@ class AnalysisResultFullScreen extends StatelessWidget {
       debugPrint('Firestore save failed: $e');
     }
 
+    final savedWithLocation = latitude != null && longitude != null;
     await showCupertinoDialog(
       context: ctx,
       builder: (_) => CupertinoAlertDialog(
         title: const Text('Saved'),
-        content: const Text('Image, result & location saved.'),
+        content: Text(
+          savedWithLocation ? 'Image, result & location saved.' : 'Image & result saved.',
+        ),
         actions: [
           CupertinoDialogAction(
             child: const Text('OK'),
