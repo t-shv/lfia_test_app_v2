@@ -60,6 +60,8 @@ dependencies:
 
 dependency_overrides:
   http: ^1.4.0
+  mobile_scanner:
+    path: third_party/mobile_scanner
 
  
 
