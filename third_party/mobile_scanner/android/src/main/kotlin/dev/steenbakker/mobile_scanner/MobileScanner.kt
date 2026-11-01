@@ -49,6 +49,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -83,6 +85,8 @@ class MobileScanner(
     private var detectionTimeout: Long = 250
     private var returnImage = false
     private var isPaused = false
+    private val nativeFrameBaselineLogged = AtomicBoolean(false)
+    private val nativeBarcodePositiveCount = AtomicInteger(0)
 
     companion object {
         // Configure the `ProcessCameraProvider` to only log errors.
@@ -113,6 +117,23 @@ class MobileScanner(
     @ExperimentalGetImage
     val captureOutput = ImageAnalysis.Analyzer { imageProxy -> // YUV_420_888 format
         val mediaImage = imageProxy.image ?: return@Analyzer
+
+        if (nativeFrameBaselineLogged.compareAndSet(false, true)) {
+            val planes = imageProxy.planes
+            Log.d(
+                "MobileScanner",
+                "[NATIVE_FRAME_BASELINE] first_frame " +
+                    "width=${imageProxy.width} height=${imageProxy.height} " +
+                    "format=${imageProxy.format} " +
+                    "rotation_degrees=${imageProxy.imageInfo.rotationDegrees} " +
+                    "y_row_stride=${planes.getOrNull(0)?.rowStride} " +
+                    "y_pixel_stride=${planes.getOrNull(0)?.pixelStride} " +
+                    "u_row_stride=${planes.getOrNull(1)?.rowStride} " +
+                    "u_pixel_stride=${planes.getOrNull(1)?.pixelStride} " +
+                    "v_row_stride=${planes.getOrNull(2)?.rowStride} " +
+                    "v_pixel_stride=${planes.getOrNull(2)?.pixelStride}",
+            )
+        }
 
         val inputImage = if (invertImage) {
             invertInputImage(imageProxy)
@@ -145,21 +166,62 @@ class MobileScanner(
                 }
 
                 val barcodeMap: MutableList<Map<String, Any?>> = mutableListOf()
+                var firstAcceptedBarcode: Barcode? = null
 
                 for (barcode in barcodes) {
                     if (scanWindow == null) {
                         barcodeMap.add(barcode.data)
+                        firstAcceptedBarcode = firstAcceptedBarcode ?: barcode
                         continue
                     }
 
                     if (isBarcodeInScanWindow(scanWindow!!, barcode, imageProxy)) {
                         barcodeMap.add(barcode.data)
+                        firstAcceptedBarcode = firstAcceptedBarcode ?: barcode
                     }
                 }
 
                 if (barcodeMap.isEmpty()) {
                     imageProxy.close()
                     return@addOnSuccessListener
+                }
+
+                val positiveCount = nativeBarcodePositiveCount.incrementAndGet()
+                if (positiveCount % 10 == 0) {
+                    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                    val uprightWidth = if (rotationDegrees == 90 || rotationDegrees == 270) {
+                        imageProxy.height.toFloat()
+                    } else {
+                        imageProxy.width.toFloat()
+                    }
+                    val uprightHeight = if (rotationDegrees == 90 || rotationDegrees == 270) {
+                        imageProxy.width.toFloat()
+                    } else {
+                        imageProxy.height.toFloat()
+                    }
+                    val boundingBox = firstAcceptedBarcode?.boundingBox
+                    if (boundingBox != null) {
+                        Log.d(
+                            "MobileScanner",
+                            "[NATIVE_FRAME_BASELINE] barcode_positive_count=$positiveCount " +
+                                "bbox_width_norm=${boundingBox.width().toFloat() / uprightWidth} " +
+                                "bbox_height_norm=${boundingBox.height().toFloat() / uprightHeight} " +
+                                "center_x_norm=${boundingBox.centerX().toFloat() / uprightWidth} " +
+                                "center_y_norm=${boundingBox.centerY().toFloat() / uprightHeight} " +
+                                "image_width=${imageProxy.width} image_height=${imageProxy.height} " +
+                                "upright_width=${uprightWidth.toInt()} upright_height=${uprightHeight.toInt()} " +
+                                "rotation_degrees=$rotationDegrees",
+                        )
+                    } else {
+                        Log.d(
+                            "MobileScanner",
+                            "[NATIVE_FRAME_BASELINE] barcode_positive_count=$positiveCount " +
+                                "bbox=unavailable image_width=${imageProxy.width} " +
+                                "image_height=${imageProxy.height} " +
+                                "upright_width=${uprightWidth.toInt()} upright_height=${uprightHeight.toInt()} " +
+                                "rotation_degrees=$rotationDegrees",
+                        )
+                    }
                 }
 
                 val portrait = (camera?.cameraInfo?.sensorRotationDegrees ?: 0) % 180 == 0
@@ -348,6 +410,8 @@ class MobileScanner(
         this.detectionTimeout = detectionTimeout
         this.returnImage = returnImage
         this.invertImage = invertImage
+        nativeFrameBaselineLogged.set(false)
+        nativeBarcodePositiveCount.set(0)
 
         if (camera?.cameraInfo != null && preview != null && surfaceProducer != null && !isPaused) {
 
