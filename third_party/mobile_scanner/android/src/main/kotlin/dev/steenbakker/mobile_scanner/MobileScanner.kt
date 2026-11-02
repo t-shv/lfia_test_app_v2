@@ -53,6 +53,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -89,11 +90,17 @@ class MobileScanner(
     private var isPaused = false
     private val nativeFrameBaselineLogged = AtomicBoolean(false)
     private val nativeBarcodePositiveCount = AtomicInteger(0)
+    private val nativeDetectionEventId = AtomicLong(0)
+    private val nativeAcceptanceSequence = AtomicInteger(0)
     private val retainedFrameLock = Any()
     private var retainedFrame: RetainedYuvFrame? = null
     private var retentionInProgress = false
     private var retentionSessionId = 0L
     private var retentionSessionActive = false
+    private var acceptanceGuideWidth: Double? = null
+    private var acceptanceGuideHeight: Double? = null
+    private var acceptanceMinFill: Double? = null
+    private var acceptanceMaxFill: Double? = null
 
     private data class RetainedYuvFrame(
         val bytes: ByteArray,
@@ -103,6 +110,19 @@ class MobileScanner(
         val sourceFormat: Int,
         val bufferFormat: Int,
         val timestamp: Long,
+    )
+
+    private data class AcceptanceConfig(
+        val guideWidth: Double?,
+        val guideHeight: Double?,
+        val minFill: Double?,
+        val maxFill: Double?,
+    )
+
+    private data class AcceptanceResult(
+        val accepted: Boolean,
+        val fill: Double?,
+        val configured: Boolean,
     )
 
     companion object {
@@ -188,17 +208,24 @@ class MobileScanner(
 
                 val barcodeMap: MutableList<Map<String, Any?>> = mutableListOf()
                 var firstAcceptedBarcode: Barcode? = null
+                var firstFlutterBarcode: Barcode? = null
 
                 for (barcode in barcodes) {
                     if (scanWindow == null) {
                         barcodeMap.add(barcode.data)
                         firstAcceptedBarcode = firstAcceptedBarcode ?: barcode
+                        if (firstFlutterBarcode == null && barcode.rawValue != null) {
+                            firstFlutterBarcode = barcode
+                        }
                         continue
                     }
 
                     if (isBarcodeInScanWindow(scanWindow!!, barcode, imageProxy)) {
                         barcodeMap.add(barcode.data)
                         firstAcceptedBarcode = firstAcceptedBarcode ?: barcode
+                        if (firstFlutterBarcode == null && barcode.rawValue != null) {
+                            firstFlutterBarcode = barcode
+                        }
                     }
                 }
 
@@ -206,6 +233,30 @@ class MobileScanner(
                     imageProxy.close()
                     return@addOnSuccessListener
                 }
+
+                val detectionEventId = nativeDetectionEventId.incrementAndGet()
+                val acceptanceConfig = synchronized(retainedFrameLock) {
+                    AcceptanceConfig(
+                        acceptanceGuideWidth,
+                        acceptanceGuideHeight,
+                        acceptanceMinFill,
+                        acceptanceMaxFill,
+                    )
+                }
+                val nativeAcceptance = evaluateAcceptance(firstFlutterBarcode, acceptanceConfig)
+                val nativeSequence = if (nativeAcceptance.accepted) {
+                    nativeAcceptanceSequence.incrementAndGet()
+                } else {
+                    nativeAcceptanceSequence.set(0)
+                    0
+                }
+                Log.d(
+                    "MobileScanner",
+                    "[NATIVE_ACCEPTANCE] session_id=${frameSessionId ?: -1L} " +
+                        "event_id=$detectionEventId configured=${nativeAcceptance.configured} " +
+                        "accepted=${nativeAcceptance.accepted} " +
+                        "fill=${nativeAcceptance.fill ?: "unavailable"} sequence=$nativeSequence",
+                )
 
                 if (frameSessionId != null) {
                     retainFirstYuvFrame(imageProxy, mediaImage, frameSessionId)
@@ -256,7 +307,9 @@ class MobileScanner(
                         barcodeMap,
                         null,
                         if (portrait) inputImage.width else inputImage.height,
-                        if (portrait) inputImage.height else inputImage.width)
+                        if (portrait) inputImage.height else inputImage.width,
+                        frameSessionId ?: -1L,
+                        detectionEventId)
                     imageProxy.close()
                     return@addOnSuccessListener
                 }
@@ -279,7 +332,9 @@ class MobileScanner(
                         barcodeMap,
                         byteArray,
                         bmWidth,
-                        bmHeight
+                        bmHeight,
+                        frameSessionId ?: -1L,
+                        detectionEventId
                     )
 
                     bmResult.recycle()
@@ -411,6 +466,50 @@ class MobileScanner(
     private fun clearRetainedFrameLocked() {
         retainedFrame?.bytes?.fill(0)
         retainedFrame = null
+    }
+
+    private fun evaluateAcceptance(
+        barcode: Barcode?,
+        config: AcceptanceConfig,
+    ): AcceptanceResult {
+        val guideWidth = config.guideWidth
+        val guideHeight = config.guideHeight
+        val minFill = config.minFill
+        val maxFill = config.maxFill
+        if (barcode == null || guideWidth == null || guideHeight == null ||
+            minFill == null || maxFill == null || guideWidth <= 0.0 || guideHeight <= 0.0
+        ) {
+            return AcceptanceResult(false, null, guideWidth != null && guideHeight != null &&
+                minFill != null && maxFill != null)
+        }
+
+        val corners = barcode.cornerPoints ?: return AcceptanceResult(false, null, true)
+        if (corners.size < 4) {
+            return AcceptanceResult(false, null, true)
+        }
+
+        val qrWidth = corners.maxOf { it.x } - corners.minOf { it.x }
+        val qrHeight = corners.maxOf { it.y } - corners.minOf { it.y }
+        if (qrWidth <= 0 || qrHeight <= 0) {
+            return AcceptanceResult(false, null, true)
+        }
+
+        val fill = (qrWidth.toDouble() * qrHeight.toDouble()) / (guideWidth * guideHeight)
+        return AcceptanceResult(fill >= minFill && fill <= maxFill, fill, true)
+    }
+
+    fun setAcceptanceGeometry(
+        guideWidth: Double,
+        guideHeight: Double,
+        minFill: Double,
+        maxFill: Double,
+    ) {
+        synchronized(retainedFrameLock) {
+            acceptanceGuideWidth = guideWidth
+            acceptanceGuideHeight = guideHeight
+            acceptanceMinFill = minFill
+            acceptanceMaxFill = maxFill
+        }
     }
 
     /**
@@ -548,6 +647,8 @@ class MobileScanner(
         this.invertImage = invertImage
         nativeFrameBaselineLogged.set(false)
         nativeBarcodePositiveCount.set(0)
+        nativeDetectionEventId.set(0)
+        nativeAcceptanceSequence.set(0)
 
         if (camera?.cameraInfo != null && preview != null && surfaceProducer != null && !isPaused) {
 

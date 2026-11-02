@@ -59,10 +59,12 @@ class MobileScannerHandler(
 
     private var analyzerResult: MethodChannel.Result? = null
 
-    private val callback: MobileScannerCallback = { barcodes: List<Map<String, Any?>>, image: ByteArray?, width: Int?, height: Int? ->
+    private val callback: MobileScannerCallback = { barcodes: List<Map<String, Any?>>, image: ByteArray?, width: Int?, height: Int?, sessionId: Long, eventId: Long ->
         barcodeHandler.publishEvent(mapOf(
             "name" to "barcode",
             "data" to barcodes,
+            "sessionId" to sessionId,
+            "eventId" to eventId,
             // The image dimensions are always provided.
             // The image bytes are only non-null when `returnImage` is true.
             "image" to mapOf(
@@ -81,6 +83,14 @@ class MobileScannerHandler(
     private var deviceOrientationChannel: EventChannel? = null
 
     private var mobileScanner: MobileScanner? = null
+    private var pendingAcceptanceGeometry: AcceptanceGeometry? = null
+
+    private data class AcceptanceGeometry(
+        val guideWidth: Double,
+        val guideHeight: Double,
+        val minFill: Double,
+        val maxFill: Double,
+    )
 
     private val torchStateCallback: TorchStateCallback = {state: Int ->
         // Off = 0, On = 1
@@ -104,6 +114,14 @@ class MobileScannerHandler(
 
         mobileScanner = MobileScanner(
             activity, textureRegistry, callback, errorCallback, deviceOrientationListener)
+        pendingAcceptanceGeometry?.let { geometry ->
+            mobileScanner?.setAcceptanceGeometry(
+                geometry.guideWidth,
+                geometry.guideHeight,
+                geometry.minFill,
+                geometry.maxFill,
+            )
+        }
     }
 
     fun dispose(activityPluginBinding: ActivityPluginBinding) {
@@ -151,6 +169,7 @@ class MobileScannerHandler(
             "setScale" -> setScale(call, result)
             "resetScale" -> resetScale(result)
             "updateScanWindow" -> updateScanWindow(call, result)
+            "setAcceptanceGeometry" -> setAcceptanceGeometry(call, result)
             else -> result.notImplemented()
         }
     }
@@ -321,6 +340,28 @@ class MobileScannerHandler(
     private fun updateScanWindow(call: MethodCall, result: MethodChannel.Result) {
         mobileScanner?.scanWindow = call.argument<List<Float>?>("rect")
 
+        result.success(null)
+    }
+
+    private fun setAcceptanceGeometry(call: MethodCall, result: MethodChannel.Result) {
+        val guideWidth = call.argument<Double>("guideWidth")
+        val guideHeight = call.argument<Double>("guideHeight")
+        val minFill = call.argument<Double>("minFill")
+        val maxFill = call.argument<Double>("maxFill")
+
+        if (guideWidth == null || guideHeight == null || minFill == null || maxFill == null) {
+            result.error("INVALID_ACCEPTANCE_GEOMETRY", "All acceptance geometry values are required.", null)
+            return
+        }
+
+        val geometry = AcceptanceGeometry(guideWidth, guideHeight, minFill, maxFill)
+        pendingAcceptanceGeometry = geometry
+        mobileScanner?.setAcceptanceGeometry(
+            geometry.guideWidth,
+            geometry.guideHeight,
+            geometry.minFill,
+            geometry.maxFill,
+        )
         result.success(null)
     }
 

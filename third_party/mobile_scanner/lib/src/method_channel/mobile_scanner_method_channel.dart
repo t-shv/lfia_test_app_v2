@@ -423,6 +423,21 @@ class MethodChannelMobileScanner extends MobileScannerPlatform {
   }
 
   @override
+  Future<void> setAcceptanceGeometry({
+    required double guideWidth,
+    required double guideHeight,
+    required double minFill,
+    required double maxFill,
+  }) async {
+    await methodChannel.invokeMethod<void>('setAcceptanceGeometry', {
+      'guideWidth': guideWidth,
+      'guideHeight': guideHeight,
+      'minFill': minFill,
+      'maxFill': maxFill,
+    });
+  }
+
+  @override
   Future<void> dispose() async {
     await updateScanWindow(null);
     await stop();

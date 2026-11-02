@@ -129,6 +129,10 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
   StreamSubscription<DeviceOrientation>? _deviceOrientationSubscription;
 
   bool _isDisposed = false;
+  double? _acceptanceGuideWidth;
+  double? _acceptanceGuideHeight;
+  double? _acceptanceMinFill;
+  double? _acceptanceMaxFill;
   // This completer keeps track of whether the MobileScanner widget,
   // that is attached to this controller,
   // called its `initState()` lifecycle method.
@@ -416,6 +420,14 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
       final MobileScannerViewAttributes viewAttributes =
           await MobileScannerPlatform.instance.start(options);
 
+      try {
+        await _applyAcceptanceGeometry();
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[DART_ACCEPTANCE] post_start_config_error=$error\n$stackTrace',
+        );
+      }
+
       if (!_isDisposed) {
         value = value.copyWith(
           availableCameras: viewAttributes.numberOfCameras,
@@ -545,6 +557,44 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
     }
 
     await MobileScannerPlatform.instance.updateScanWindow(window);
+  }
+
+  /// Configure native diagnostics to mirror the live QR acceptance geometry.
+  Future<void> setAcceptanceGeometry({
+    required double guideWidth,
+    required double guideHeight,
+    required double minFill,
+    required double maxFill,
+  }) async {
+    if (_isDisposed) {
+      return;
+    }
+
+    _acceptanceGuideWidth = guideWidth;
+    _acceptanceGuideHeight = guideHeight;
+    _acceptanceMinFill = minFill;
+    _acceptanceMaxFill = maxFill;
+    await _applyAcceptanceGeometry();
+  }
+
+  Future<void> _applyAcceptanceGeometry() async {
+    final guideWidth = _acceptanceGuideWidth;
+    final guideHeight = _acceptanceGuideHeight;
+    final minFill = _acceptanceMinFill;
+    final maxFill = _acceptanceMaxFill;
+    if (guideWidth == null ||
+        guideHeight == null ||
+        minFill == null ||
+        maxFill == null) {
+      return;
+    }
+
+    await MobileScannerPlatform.instance.setAcceptanceGeometry(
+      guideWidth: guideWidth,
+      guideHeight: guideHeight,
+      minFill: minFill,
+      maxFill: maxFill,
+    );
   }
 
   /// Dispose the controller.

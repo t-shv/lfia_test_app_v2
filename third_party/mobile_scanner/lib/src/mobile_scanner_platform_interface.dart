@@ -119,6 +119,18 @@ abstract class MobileScannerPlatform extends PlatformInterface {
     throw UnimplementedError('updateScanWindow() has not been implemented.');
   }
 
+  /// Configure the geometry used by the native acceptance diagnostics.
+  Future<void> setAcceptanceGeometry({
+    required double guideWidth,
+    required double guideHeight,
+    required double minFill,
+    required double maxFill,
+  }) {
+    throw UnimplementedError(
+      'setAcceptanceGeometry() has not been implemented.',
+    );
+  }
+
   /// Dispose of this [MobileScannerPlatform] instance.
   Future<void> dispose() {
     throw UnimplementedError('dispose() has not been implemented.');
