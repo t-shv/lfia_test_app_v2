@@ -20,8 +20,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:gal/gal.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart'
-    show SystemChrome, SystemUiOverlayStyle, MethodChannel; //new methodChannel import for opencv connection
-
+    show
+        SystemChrome,
+        SystemUiOverlayStyle,
+        MethodChannel; //new methodChannel import for opencv connection
 
 import 'live_guide_camera.dart';
 import 'learn_more_screen.dart';
@@ -31,13 +33,15 @@ const validTestStripQRCodes = <String>{
   'TS-0001',
   'COV-19-TS-0000020-1219',
   'COV-19-TS-0000020-0915'
-  'COV-19-TS-0000116-1219',
+      'COV-19-TS-0000116-1219',
 };
 
 // Method channel for opencv connection
 const MethodChannel _opencvChannel = MethodChannel('lfia/opencv');
 
-Future<Map<String, dynamic>> _checkImageQualityWithOpenCV(String imagePath) async {
+Future<Map<String, dynamic>> _checkImageQualityWithOpenCV(
+  String imagePath,
+) async {
   final result = await _opencvChannel.invokeMethod<Map<dynamic, dynamic>>(
     'checkImageQuality',
     {'imagePath': imagePath},
@@ -45,7 +49,6 @@ Future<Map<String, dynamic>> _checkImageQualityWithOpenCV(String imagePath) asyn
 
   return Map<String, dynamic>.from(result ?? {});
 }
-
 
 /// Preprocess image to match CNN input requirements
 Future<Float32List> _preprocessImage(String path) async {
@@ -154,12 +157,16 @@ class _CameraScreenState extends State<CameraScreen> {
         throw StateError('Captured file does not exist: $imagePath');
       }
       existsClock.stop();
-      debugPrint('[PROCESS_BASELINE] image_exists_check_ms=${existsClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] image_exists_check_ms=${existsClock.elapsedMilliseconds}',
+      );
 
       final loadClock = Stopwatch()..start();
       final originalBytes = await originalFile.readAsBytes();
       loadClock.stop();
-      debugPrint('[PROCESS_BASELINE] image_load_ms=${loadClock.elapsedMilliseconds} bytes=${originalBytes.length}');
+      debugPrint(
+        '[PROCESS_BASELINE] image_load_ms=${loadClock.elapsedMilliseconds} bytes=${originalBytes.length}',
+      );
 
       if (originalBytes.isEmpty) {
         throw StateError('Captured file is empty: $imagePath');
@@ -168,7 +175,9 @@ class _CameraScreenState extends State<CameraScreen> {
       final decodeClock = Stopwatch()..start();
       final decoded = img.decodeImage(originalBytes);
       decodeClock.stop();
-      debugPrint('[PROCESS_BASELINE] image_decode_ms=${decodeClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] image_decode_ms=${decodeClock.elapsedMilliseconds}',
+      );
 
       if (decoded == null) {
         throw StateError('Could not decode captured image.');
@@ -177,17 +186,21 @@ class _CameraScreenState extends State<CameraScreen> {
       final orientationClock = Stopwatch()..start();
       final origImage = img.bakeOrientation(decoded);
       orientationClock.stop();
-      debugPrint('[PROCESS_BASELINE] image_orientation_ms=${orientationClock.elapsedMilliseconds}');
-      
-      //// fixed orientation logic 
-img.Image fixedImage = origImage;
+      debugPrint(
+        '[PROCESS_BASELINE] image_orientation_ms=${orientationClock.elapsedMilliseconds}',
+      );
 
-final rotationClock = Stopwatch()..start();
-if (fixedImage.width > fixedImage.height) {
-  fixedImage = img.copyRotate(fixedImage, 90);
-}
-rotationClock.stop();
-debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMilliseconds}');
+      //// fixed orientation logic
+      img.Image fixedImage = origImage;
+
+      final rotationClock = Stopwatch()..start();
+      if (fixedImage.width > fixedImage.height) {
+        fixedImage = img.copyRotate(fixedImage, 90);
+      }
+      rotationClock.stop();
+      debugPrint(
+        '[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMilliseconds}',
+      );
       // new line ends
 
       debugPrint(
@@ -197,18 +210,20 @@ debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMillisec
       final tmpDirClock = Stopwatch()..start();
       final tmpDir = await getTemporaryDirectory();
       tmpDirClock.stop();
-      debugPrint('[PROCESS_BASELINE] temporary_directory_ms=${tmpDirClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] temporary_directory_ms=${tmpDirClock.elapsedMilliseconds}',
+      );
       final orientedPath =
           '${tmpDir.path}/oriented_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-// fixed orientation
+      // fixed orientation
       final orientedJpeg = img.encodeJpg(fixedImage, quality: 95);
       final orientedSaveClock = Stopwatch()..start();
-      await File(orientedPath).writeAsBytes(
-        orientedJpeg,
-      );
+      await File(orientedPath).writeAsBytes(orientedJpeg);
       orientedSaveClock.stop();
-      debugPrint('[PROCESS_BASELINE] oriented_image_save_ms=${orientedSaveClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] oriented_image_save_ms=${orientedSaveClock.elapsedMilliseconds}',
+      );
 
       if (kDebugMode) {
         final originalQrClock = Stopwatch()..start();
@@ -244,12 +259,13 @@ debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMillisec
       var orientedBarcodeCount = 0;
       final Barcode? highResQr = await detectQrOnFile(
         orientedPath,
-        onBarcodeCount: kDebugMode
-            ? (count) => orientedBarcodeCount = count
-            : null,
+        onBarcodeCount:
+            kDebugMode ? (count) => orientedBarcodeCount = count : null,
       );
       qrRedetectClock.stop();
-      debugPrint('[PROCESS_BASELINE] qr_redetection_ms=${qrRedetectClock.elapsedMilliseconds} found=${highResQr != null}');
+      debugPrint(
+        '[PROCESS_BASELINE] qr_redetection_ms=${qrRedetectClock.elapsedMilliseconds} found=${highResQr != null}',
+      );
       if (kDebugMode) {
         debugPrint(
           '[QR_FILE_DIAGNOSTIC] oriented_dimensions=${fixedImage.width}x${fixedImage.height} '
@@ -261,50 +277,40 @@ debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMillisec
         );
       }
 
+      if (highResQr == null || highResQr.corners.length < 4) {
+        throw StateError('QR redetection failed. Please retry the scan.');
+      }
+
       final qrValidationClock = Stopwatch()..start();
-      final String code =
-          (highResQr?.rawValue ?? previewQr.barcode.rawValue ?? '').trim();
+      final String code = (highResQr.rawValue ?? '').trim();
       final validCode = validTestStripQRCodes.contains(code);
       qrValidationClock.stop();
-      debugPrint('[PROCESS_BASELINE] qr_validation_ms=${qrValidationClock.elapsedMilliseconds} valid=$validCode code=$code');
+      debugPrint(
+        '[PROCESS_BASELINE] qr_validation_ms=${qrValidationClock.elapsedMilliseconds} valid=$validCode code=$code',
+      );
 
       if (!validCode) {
         final dialogClock = Stopwatch()..start();
         await showCupertinoDialog(
           context: context,
-          builder: (_) => CupertinoAlertDialog(
-            title: const Text('Unrecognized Strip'),
-            content: Text('QR code "$code" is not on the approved list.'),
-            actions: [
-              CupertinoDialogAction(
-                child: const Text('OK'),
-                onPressed: () => Navigator.pop(context),
+          builder:
+              (_) => CupertinoAlertDialog(
+                title: const Text('Unrecognized Strip'),
+                content: Text('QR code "$code" is not on the approved list.'),
+                actions: [
+                  CupertinoDialogAction(
+                    child: const Text('OK'),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               ),
-            ],
-          ),
         );
         dialogClock.stop();
-        debugPrint('[PROCESS_BASELINE] invalid_qr_dialog_wait_ms=${dialogClock.elapsedMilliseconds}');
+        debugPrint(
+          '[PROCESS_BASELINE] invalid_qr_dialog_wait_ms=${dialogClock.elapsedMilliseconds}',
+        );
         return;
       }
-
-      /* -------- 3. Quick feedback -------- */
-      final validDialogClock = Stopwatch()..start();
-      await showCupertinoDialog(
-        context: context,
-        builder: (_) => CupertinoAlertDialog(
-          title: const Text('Valid Strip Detected'),
-          content: Text(code),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('Continue'),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ],
-        ),
-      );
-      validDialogClock.stop();
-      debugPrint('[PROCESS_BASELINE] valid_qr_dialog_wait_ms=${validDialogClock.elapsedMilliseconds}');
 
       if (!mounted) return;
 
@@ -315,171 +321,15 @@ debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMillisec
         fixedImage.height.toDouble(),
       );
 
-      late final List<Offset> qrPoints;
-      late final String qrSource;
-
-     if (highResQr != null && highResQr.corners.length >= 4) {
-  qrPoints = _pointsFromBarcode(highResQr);
-  qrSource = 'high-res still photo';
-} else {
-  debugPrint('WARNING: highResQr failed. Using safe center crop instead.');
-
-  final safeCropCalculationClock = Stopwatch()..start();
-  final safeCrop = _centerCropBox(origImage);
-  safeCropCalculationClock.stop();
-  debugPrint('[PROCESS_BASELINE] safe_crop_calculation_ms=${safeCropCalculationClock.elapsedMilliseconds}');
-
-  final safeCropCopyClock = Stopwatch()..start();
-  final cropped = img.copyCrop(
-    fixedImage, // fixed orientation
-    safeCrop.x,
-    safeCrop.y,
-    safeCrop.width,
-    safeCrop.height,
-  );
-  safeCropCopyClock.stop();
-  debugPrint('[PROCESS_BASELINE] safe_crop_copy_ms=${safeCropCopyClock.elapsedMilliseconds}');
-
-  final safeCropSaveClock = Stopwatch()..start();
-  final tmpDir = await getTemporaryDirectory();
-  final autoPath =
-      '${tmpDir.path}/safe_center_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-  await File(autoPath).writeAsBytes(
-    img.encodeJpg(cropped, quality: 95),
-  );
-  safeCropSaveClock.stop();
-  debugPrint('[PROCESS_BASELINE] safe_crop_save_ms=${safeCropSaveClock.elapsedMilliseconds}');
-
-  debugPrint('[PROCESS_BASELINE] safe_ucrop_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
-  final safeUcropClock = Stopwatch()..start();
-  final userCrop = await ImageCropper().cropImage(
-    sourcePath: autoPath,
-    uiSettings: [
-      AndroidUiSettings(
-        toolbarTitle: 'Adjust Crop',
-        toolbarColor: CupertinoColors.activeBlue,
-        activeControlsWidgetColor: CupertinoColors.white,
-        lockAspectRatio: false,
-        showCropGrid: true,
-      ),
-      IOSUiSettings(
-        title: 'Adjust Crop',
-        aspectRatioLockEnabled: false,
-      ),
-    ],
-  );
-  safeUcropClock.stop();
-  debugPrint('[PROCESS_BASELINE] safe_ucrop_wait_and_return_ms=${safeUcropClock.elapsedMilliseconds}');
-
-  final finalPath = userCrop?.path ?? autoPath;
-
-
-//opencv call starts/////////////////////////////////
-
-final safeOpenCvClock = Stopwatch()..start();
-final quality = await _checkImageQualityWithOpenCV(finalPath);
-safeOpenCvClock.stop();
-debugPrint('[PROCESS_BASELINE] safe_opencv_quality_ms=${safeOpenCvClock.elapsedMilliseconds}');
-
-debugPrint('OpenCV quality result: $quality');
-
-final usable = quality['usable'] == true;
-final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
-final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
-
-if (!usable && mounted) {
-  final safeQualityDialogClock = Stopwatch()..start();
-  final continueAnyway = await showCupertinoDialog<bool>(
-    context: context,
-    builder: (_) => CupertinoAlertDialog(
-      title: const Text('Image Quality Warning'),
-      content: Text(
-        'Contrast/Exposure: $contrastExposure\n'
-        'Blurriness: $blurriness\n\n'
-        'Retaking the photo is recommended.',
-      ),
-      actions: [
-        CupertinoDialogAction(
-          isDestructiveAction: true,
-          child: const Text('Retake'),
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        CupertinoDialogAction(
-          child: const Text('Continue Anyway'),
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
-    ),
-  );
-  safeQualityDialogClock.stop();
-  debugPrint('[PROCESS_BASELINE] safe_quality_warning_dialog_wait_ms=${safeQualityDialogClock.elapsedMilliseconds}');
-
-  if (continueAnyway != true) {
-    return;
-  }
-}
-// opencv call ends///////////////////////////////
-
-  
-
-  // continue directly to CNN from here
-  Interpreter? interpreter;
-
-  try {
-    final safeModelLoadClock = Stopwatch()..start();
-    interpreter = await Interpreter.fromAsset(
-      'assets/new_large_model.tflite',
-    );
-    safeModelLoadClock.stop();
-    debugPrint('[PROCESS_BASELINE] safe_cnn_model_load_ms=${safeModelLoadClock.elapsedMilliseconds}');
-
-    final safePreprocessClock = Stopwatch()..start();
-    final inputData = await _preprocessImage(finalPath);
-    safePreprocessClock.stop();
-    debugPrint('[PROCESS_BASELINE] safe_cnn_preprocess_ms=${safePreprocessClock.elapsedMilliseconds}');
-    final inputTensor = inputData.reshape([1, 256, 256, 1]);
-    final outputTensor = Float32List(1).reshape([1, 1]);
-
-    final safeInferenceClock = Stopwatch()..start();
-    interpreter.run(inputTensor, outputTensor);
-    safeInferenceClock.stop();
-    debugPrint('[PROCESS_BASELINE] safe_cnn_inference_ms=${safeInferenceClock.elapsedMilliseconds}');
-
-    final prob = outputTensor[0][0];
-    final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
-    final conf = (prob * 100).toStringAsFixed(1);
-
-    if (!mounted) return;
-
-    debugPrint('[PROCESS_BASELINE] safe_result_screen_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
-    Navigator.of(context).push(
-      CupertinoPageRoute(
-        builder: (_) => AnalysisResultFullScreen(
-          imagePath: finalPath,
-          result: label,
-          confidence: conf,
-          latitude: latitude,
-          longitude: longitude,
-        ),
-      ),
-    );
-  } finally {
-    interpreter?.close();
-  }
-
-  return;
-}
-
+      final qrPoints = _pointsFromBarcode(highResQr);
+      const qrSource = 'oriented live-frame JPEG';
 
       final cropPointValidationClock = Stopwatch()..start();
-      _validateQrPoints(
-        pts: qrPoints,
-        imageSize: imageSize,
-        source: qrSource,
-      );
+      _validateQrPoints(pts: qrPoints, imageSize: imageSize, source: qrSource);
       cropPointValidationClock.stop();
-      debugPrint('[PROCESS_BASELINE] qr_crop_point_validation_ms=${cropPointValidationClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] qr_crop_point_validation_ms=${cropPointValidationClock.elapsedMilliseconds}',
+      );
 
       /* -------- 5. Auto-crop using your existing crop math -------- */
       final cropCalculationClock = Stopwatch()..start();
@@ -488,7 +338,9 @@ if (!usable && mounted) {
         image: fixedImage,
       );
       cropCalculationClock.stop();
-      debugPrint('[PROCESS_BASELINE] automatic_crop_calculation_ms=${cropCalculationClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] automatic_crop_calculation_ms=${cropCalculationClock.elapsedMilliseconds}',
+      );
 
       debugPrint('QR source: $qrSource');
       debugPrint('QR points: ${_formatPoints(qrPoints)}');
@@ -503,88 +355,74 @@ if (!usable && mounted) {
         cropBox.height,
       );
       cropCopyClock.stop();
-      debugPrint('[PROCESS_BASELINE] automatic_crop_copy_ms=${cropCopyClock.elapsedMilliseconds}');
-      
+      debugPrint(
+        '[PROCESS_BASELINE] automatic_crop_copy_ms=${cropCopyClock.elapsedMilliseconds}',
+      );
 
       final autoPath =
           '${tmpDir.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
       final cropSaveClock = Stopwatch()..start();
-      await File(autoPath).writeAsBytes(
-        img.encodeJpg(cropped, quality: 95),
-      );
+      await File(autoPath).writeAsBytes(img.encodeJpg(cropped, quality: 95));
       cropSaveClock.stop();
-      debugPrint('[PROCESS_BASELINE] automatic_crop_save_ms=${cropSaveClock.elapsedMilliseconds}');
-
-      /* -------- 6. Let user tweak crop -------- */
-      debugPrint('[PROCESS_BASELINE] ucrop_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
-      final ucropClock = Stopwatch()..start();
-      final userCrop = await ImageCropper().cropImage(
-        sourcePath: autoPath,
-        uiSettings: [
-          AndroidUiSettings(
-            toolbarTitle: 'Adjust Crop',
-            toolbarColor: CupertinoColors.activeBlue,
-            activeControlsWidgetColor: CupertinoColors.white,
-            lockAspectRatio: false,
-            showCropGrid: true,
-          ),
-          IOSUiSettings(
-            title: 'Adjust Crop',
-            aspectRatioLockEnabled: false,
-          ),
-        ],
+      debugPrint(
+        '[PROCESS_BASELINE] automatic_crop_save_ms=${cropSaveClock.elapsedMilliseconds}',
       );
-      ucropClock.stop();
-      debugPrint('[PROCESS_BASELINE] ucrop_wait_and_return_ms=${ucropClock.elapsedMilliseconds}');
 
-      final finalPath = userCrop?.path ?? autoPath;
+      /* -------- 6. Continue with the automatic crop -------- */
+      final finalPath = autoPath;
 
-//openCV call
-  final openCvClock = Stopwatch()..start();
-  final quality = await _checkImageQualityWithOpenCV(finalPath);
-  openCvClock.stop();
-  debugPrint('[PROCESS_BASELINE] opencv_quality_ms=${openCvClock.elapsedMilliseconds}');
+      //openCV call
+      final openCvClock = Stopwatch()..start();
+      final quality = await _checkImageQualityWithOpenCV(finalPath);
+      openCvClock.stop();
+      debugPrint(
+        '[PROCESS_BASELINE] opencv_quality_ms=${openCvClock.elapsedMilliseconds}',
+      );
 
-debugPrint('OpenCV quality result: $quality');
+      debugPrint('OpenCV quality result: $quality');
 
-final usable = quality['usable'] == true;
-final contrastExposure = quality['contrastExposure']?.toString() ?? 'Unknown';
-final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
+      final usable = quality['usable'] == true;
+      final contrastExposure =
+          quality['contrastExposure']?.toString() ?? 'Unknown';
+      final blurriness = quality['blurriness']?.toString() ?? 'Unknown';
 
-if (!usable && mounted) {
-  final qualityDialogClock = Stopwatch()..start();
-  final continueAnyway = await showCupertinoDialog<bool>(
-    context: context,
-    builder: (_) => CupertinoAlertDialog(
-      title: const Text('Image Quality Warning'),
-      content: Text(
-        'Contrast/Exposure: $contrastExposure\n'
-        'Blurriness: $blurriness\n\n'
-        'Retaking the photo is recommended.',
-      ),
-      actions: [
-        CupertinoDialogAction(
-          isDestructiveAction: true,
-          child: const Text('Retake'),
-          onPressed: () => Navigator.pop(context, false),
-        ),
-        CupertinoDialogAction(
-          child: const Text('Continue Anyway'),
-          onPressed: () => Navigator.pop(context, true),
-        ),
-      ],
-    ),
-  );
-  qualityDialogClock.stop();
-  debugPrint('[PROCESS_BASELINE] quality_warning_dialog_wait_ms=${qualityDialogClock.elapsedMilliseconds}');
+      if (!usable && mounted) {
+        final qualityDialogClock = Stopwatch()..start();
+        final continueAnyway = await showCupertinoDialog<bool>(
+          context: context,
+          builder:
+              (_) => CupertinoAlertDialog(
+                title: const Text('Image Quality Warning'),
+                content: Text(
+                  'Contrast/Exposure: $contrastExposure\n'
+                  'Blurriness: $blurriness\n\n'
+                  'Retaking the photo is recommended.',
+                ),
+                actions: [
+                  CupertinoDialogAction(
+                    isDestructiveAction: true,
+                    child: const Text('Retake'),
+                    onPressed: () => Navigator.pop(context, false),
+                  ),
+                  CupertinoDialogAction(
+                    child: const Text('Continue Anyway'),
+                    onPressed: () => Navigator.pop(context, true),
+                  ),
+                ],
+              ),
+        );
+        qualityDialogClock.stop();
+        debugPrint(
+          '[PROCESS_BASELINE] quality_warning_dialog_wait_ms=${qualityDialogClock.elapsedMilliseconds}',
+        );
 
-  if (continueAnyway != true) {
-    return;
-  }
-}
+        if (continueAnyway != true) {
+          return;
+        }
+      }
 
-// opencv  call ends <--
+      // opencv  call ends <--
       /* -------- 7. Run CNN -------- */
       Interpreter? interpreter;
 
@@ -594,19 +432,25 @@ if (!usable && mounted) {
           'assets/new_large_model.tflite',
         );
         modelLoadClock.stop();
-        debugPrint('[PROCESS_BASELINE] cnn_model_load_ms=${modelLoadClock.elapsedMilliseconds}');
+        debugPrint(
+          '[PROCESS_BASELINE] cnn_model_load_ms=${modelLoadClock.elapsedMilliseconds}',
+        );
 
         final preprocessClock = Stopwatch()..start();
         final inputData = await _preprocessImage(finalPath);
         preprocessClock.stop();
-        debugPrint('[PROCESS_BASELINE] cnn_preprocess_ms=${preprocessClock.elapsedMilliseconds}');
+        debugPrint(
+          '[PROCESS_BASELINE] cnn_preprocess_ms=${preprocessClock.elapsedMilliseconds}',
+        );
         final inputTensor = inputData.reshape([1, 256, 256, 1]);
         final outputTensor = Float32List(1).reshape([1, 1]);
 
         final inferenceClock = Stopwatch()..start();
         interpreter.run(inputTensor, outputTensor);
         inferenceClock.stop();
-        debugPrint('[PROCESS_BASELINE] cnn_inference_ms=${inferenceClock.elapsedMilliseconds}');
+        debugPrint(
+          '[PROCESS_BASELINE] cnn_inference_ms=${inferenceClock.elapsedMilliseconds}',
+        );
 
         final prob = outputTensor[0][0];
         final label = prob >= _optimalThreshold ? 'Positive' : 'Negative';
@@ -615,16 +459,19 @@ if (!usable && mounted) {
         /* -------- 8. Show result -------- */
         if (!mounted) return;
 
-        debugPrint('[PROCESS_BASELINE] result_screen_launch_elapsed_ms=${processClock.elapsedMilliseconds}');
-        Navigator.of(context).push(
+        debugPrint(
+          '[PROCESS_BASELINE] result_screen_launch_elapsed_ms=${processClock.elapsedMilliseconds}',
+        );
+        await Navigator.of(context).push(
           CupertinoPageRoute(
-            builder: (_) => AnalysisResultFullScreen(
-              imagePath: finalPath,
-              result: label,
-              confidence: conf,
-              latitude: latitude,
-              longitude: longitude,
-            ),
+            builder:
+                (_) => AnalysisResultFullScreen(
+                  imagePath: finalPath,
+                  result: label,
+                  confidence: conf,
+                  latitude: latitude,
+                  longitude: longitude,
+                ),
           ),
         );
       } finally {
@@ -634,22 +481,25 @@ if (!usable && mounted) {
       debugPrint('====== _processCapture FAILED ======');
       debugPrint('$e');
       debugPrint('$st');
-      debugPrint('[PROCESS_BASELINE] process_failed_elapsed_ms=${processClock.elapsedMilliseconds}');
+      debugPrint(
+        '[PROCESS_BASELINE] process_failed_elapsed_ms=${processClock.elapsedMilliseconds}',
+      );
 
       if (!mounted) return;
 
       await showCupertinoDialog<void>(
         context: context,
-        builder: (_) => CupertinoAlertDialog(
-          title: const Text('Image processing failed'),
-          content: Text('$e'),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('OK'),
-              onPressed: () => Navigator.pop(context),
+        builder:
+            (_) => CupertinoAlertDialog(
+              title: const Text('Image processing failed'),
+              content: Text('$e'),
+              actions: [
+                CupertinoDialogAction(
+                  child: const Text('OK'),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             ),
-          ],
-        ),
       );
     }
   }
@@ -668,10 +518,7 @@ if (!usable && mounted) {
           desiredAccuracy: LocationAccuracy.high,
         );
 
-        return _LatLng(
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-        );
+        return _LatLng(latitude: pos.latitude, longitude: pos.longitude);
       }
     } catch (e) {
       debugPrint('Location unavailable: $e');
@@ -686,9 +533,7 @@ if (!usable && mounted) {
       child: SafeArea(
         child: Stack(
           children: [
-            Positioned.fill(
-              child: LiveGuideCamera(onShutter: _processCapture),
-            ),
+            Positioned.fill(child: LiveGuideCamera(onShutter: _processCapture)),
             Positioned(
               bottom: 16,
               right: 16,
@@ -716,10 +561,7 @@ if (!usable && mounted) {
 /* ────────── QR/crop helpers ────────── */
 
 class _LatLng {
-  const _LatLng({
-    required this.latitude,
-    required this.longitude,
-  });
+  const _LatLng({required this.latitude, required this.longitude});
 
   final double latitude;
   final double longitude;
@@ -783,9 +625,7 @@ List<Offset> _scalePreviewQrToImage({
 
   debugPrint('fallback scaleX=$scaleX scaleY=$scaleY');
 
-  return corners
-      .map((p) => Offset(p.dx * scaleX, p.dy * scaleY))
-      .toList();
+  return corners.map((p) => Offset(p.dx * scaleX, p.dy * scaleY)).toList();
 }
 
 _CropBox _centerCropBox(img.Image image) {
@@ -795,14 +635,8 @@ _CropBox _centerCropBox(img.Image image) {
   final cropX = ((image.width - cropW) / 2).round();
   final cropY = ((image.height - cropH) / 2).round();
 
-  return _CropBox(
-    x: cropX,
-    y: cropY,
-    width: cropW,
-    height: cropH,
-  );
+  return _CropBox(x: cropX, y: cropY, width: cropW, height: cropH);
 }
-
 
 _CropBox _calculateCropUsingYourExistingMath({
   required List<Offset> pts,
@@ -836,15 +670,14 @@ _CropBox _calculateCropUsingYourExistingMath({
 
   final cropX = (minX.round() - extX).clamp(0, image.width).toInt();
 
-  final cropW = (w.round() + 2 * extX)
-      .clamp(0, image.width - cropX)
-      .toInt();
+  final cropW = (w.round() + 2 * extX).clamp(0, image.width - cropX).toInt();
 
   final cropY = (minY.round() - extTop).clamp(0, image.height).toInt();
 
-  final cropH = ((maxY.round() + extBottom) - cropY)
-      .clamp(0, image.height - cropY)
-      .toInt();
+  final cropH =
+      ((maxY.round() + extBottom) - cropY)
+          .clamp(0, image.height - cropY)
+          .toInt();
 
   if (cropW <= 0 || cropH <= 0) {
     throw StateError(
@@ -863,12 +696,7 @@ _CropBox _calculateCropUsingYourExistingMath({
     );
   }
 
-  return _CropBox(
-    x: cropX,
-    y: cropY,
-    width: cropW,
-    height: cropH,
-  );
+  return _CropBox(x: cropX, y: cropY, width: cropW, height: cropH);
 }
 
 void _validateQrPoints({
@@ -900,10 +728,8 @@ void _validateQrPoints({
     'image=${imageSize.width}x${imageSize.height}',
   );
 
-  final completelyOutside = maxX < 0 ||
-      maxY < 0 ||
-      minX > imageSize.width ||
-      minY > imageSize.height;
+  final completelyOutside =
+      maxX < 0 || maxY < 0 || minX > imageSize.width || minY > imageSize.height;
 
   if (completelyOutside) {
     throw StateError(
@@ -985,18 +811,21 @@ class AnalysisResultFullScreen extends StatelessWidget {
     final savedWithLocation = latitude != null && longitude != null;
     await showCupertinoDialog(
       context: ctx,
-      builder: (_) => CupertinoAlertDialog(
-        title: const Text('Saved'),
-        content: Text(
-          savedWithLocation ? 'Image, result & location saved.' : 'Image & result saved.',
-        ),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('OK'),
-            onPressed: () => Navigator.pop(ctx),
+      builder:
+          (_) => CupertinoAlertDialog(
+            title: const Text('Saved'),
+            content: Text(
+              savedWithLocation
+                  ? 'Image, result & location saved.'
+                  : 'Image & result saved.',
+            ),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -1065,9 +894,7 @@ class AnalysisResultFullScreen extends StatelessWidget {
                 child: const Text('Learn More'),
                 onPressed: () {
                   Navigator.of(context).push(
-                    CupertinoPageRoute(
-                      builder: (_) => const LearnMoreScreen(),
-                    ),
+                    CupertinoPageRoute(builder: (_) => const LearnMoreScreen()),
                   );
                 },
               ),
@@ -1114,11 +941,7 @@ class AnalysisResultScreen extends StatelessWidget {
 
     await File(imagePath).copy(newPath);
 
-    final entry = {
-      'path': newPath,
-      'result': result,
-      'timestamp': ts,
-    };
+    final entry = {'path': newPath, 'result': result, 'timestamp': ts};
 
     final raw = prefs.getStringList('saved_tests') ?? [];
     raw.add(jsonEncode(entry));
@@ -1135,16 +958,17 @@ class AnalysisResultScreen extends StatelessWidget {
 
     await showCupertinoDialog(
       context: ctx,
-      builder: (_) => CupertinoAlertDialog(
-        title: const Text('Saved'),
-        content: const Text('Image & result saved.'),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('OK'),
-            onPressed: () => Navigator.pop(ctx),
+      builder:
+          (_) => CupertinoAlertDialog(
+            title: const Text('Saved'),
+            content: const Text('Image & result saved.'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -1276,16 +1100,17 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
 
     showCupertinoDialog(
       context: context,
-      builder: (_) => CupertinoAlertDialog(
-        title: const Text('Saved'),
-        content: const Text('Image, result & location saved.'),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('OK'),
-            onPressed: () => Navigator.of(context).pop(),
+      builder:
+          (_) => CupertinoAlertDialog(
+            title: const Text('Saved'),
+            content: const Text('Image, result & location saved.'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -1416,9 +1241,10 @@ class _DisplayPictureScreenState extends State<DisplayPictureScreen> {
                     horizontal: 24,
                     vertical: 12,
                   ),
-                  onPressed: (_croppedPath != null && !_busy)
-                      ? () => _runModel(_croppedPath!)
-                      : null,
+                  onPressed:
+                      (_croppedPath != null && !_busy)
+                          ? () => _runModel(_croppedPath!)
+                          : null,
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1525,8 +1351,7 @@ class SavedTestDetailScreen extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       'Location: ${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}',
-                      style:
-                          const TextStyle(color: CupertinoColors.systemGrey),
+                      style: const TextStyle(color: CupertinoColors.systemGrey),
                     ),
                   ],
                 ],
@@ -1568,9 +1393,7 @@ class _SavedTestsScreenState extends State<SavedTestsScreen> {
     final raw = prefs.getStringList('saved_tests') ?? [];
 
     setState(() {
-      _entries = raw
-          .map((e) => jsonDecode(e) as Map<String, dynamic>)
-          .toList();
+      _entries = raw.map((e) => jsonDecode(e) as Map<String, dynamic>).toList();
     });
   }
 
@@ -1605,87 +1428,90 @@ class _SavedTestsScreenState extends State<SavedTestsScreen> {
         transitionBetweenRoutes: false,
       ),
       child: SafeArea(
-        child: _entries.isEmpty
-            ? const Center(child: Text('No saved tests.'))
-            : ListView.builder(
-                itemCount: _entries.length,
-                itemBuilder: (context, i) {
-                  final e = _entries[i];
+        child:
+            _entries.isEmpty
+                ? const Center(child: Text('No saved tests.'))
+                : ListView.builder(
+                  itemCount: _entries.length,
+                  itemBuilder: (context, i) {
+                    final e = _entries[i];
 
-                  final ts = e['timestamp'] as int;
-                  final date = DateTime.fromMillisecondsSinceEpoch(ts);
+                    final ts = e['timestamp'] as int;
+                    final date = DateTime.fromMillisecondsSinceEpoch(ts);
 
-                  final formattedDate =
-                      "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} "
-                      "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
+                    final formattedDate =
+                        "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} "
+                        "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
 
-                  final double? lat = e['latitude'] as double?;
-                  final double? lon = e['longitude'] as double?;
+                    final double? lat = e['latitude'] as double?;
+                    final double? lon = e['longitude'] as double?;
 
-                  final subtitleText = (lat != null && lon != null)
-                      ? '$formattedDate · (${lat.toStringAsFixed(3)}, ${lon.toStringAsFixed(3)})'
-                      : formattedDate;
+                    final subtitleText =
+                        (lat != null && lon != null)
+                            ? '$formattedDate · (${lat.toStringAsFixed(3)}, ${lon.toStringAsFixed(3)})'
+                            : formattedDate;
 
-                  return GestureDetector(
-                    onTap: () async {
-                      final path = (e['path'] as String?) ?? '';
+                    return GestureDetector(
+                      onTap: () async {
+                        final path = (e['path'] as String?) ?? '';
 
-                      if (path.isEmpty || !File(path).existsSync()) {
-                        await showCupertinoDialog(
-                          context: context,
-                          builder: (_) => CupertinoAlertDialog(
-                            title: const Text('File not found'),
-                            content: const Text(
-                              'This saved image is missing or unreadable.',
-                            ),
-                            actions: [
-                              CupertinoDialogAction(
-                                isDestructiveAction: true,
-                                child: const Text('Remove entry'),
-                                onPressed: () async {
-                                  Navigator.pop(context);
-                                  await _delete(i);
-                                },
-                              ),
-                              CupertinoDialogAction(
-                                child: const Text('Cancel'),
-                                onPressed: () => Navigator.pop(context),
-                              ),
-                            ],
+                        if (path.isEmpty || !File(path).existsSync()) {
+                          await showCupertinoDialog(
+                            context: context,
+                            builder:
+                                (_) => CupertinoAlertDialog(
+                                  title: const Text('File not found'),
+                                  content: const Text(
+                                    'This saved image is missing or unreadable.',
+                                  ),
+                                  actions: [
+                                    CupertinoDialogAction(
+                                      isDestructiveAction: true,
+                                      child: const Text('Remove entry'),
+                                      onPressed: () async {
+                                        Navigator.pop(context);
+                                        await _delete(i);
+                                      },
+                                    ),
+                                    CupertinoDialogAction(
+                                      child: const Text('Cancel'),
+                                      onPressed: () => Navigator.pop(context),
+                                    ),
+                                  ],
+                                ),
+                          );
+                          return;
+                        }
+
+                        Navigator.of(context).push(
+                          CupertinoPageRoute(
+                            builder: (_) => SavedTestDetailScreen(entry: e),
                           ),
                         );
-                        return;
-                      }
-
-                      Navigator.of(context).push(
-                        CupertinoPageRoute(
-                          builder: (_) => SavedTestDetailScreen(entry: e),
+                      },
+                      child: CupertinoListTile(
+                        leading: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.file(
+                            File(e['path']),
+                            width: 50,
+                            height: 50,
+                            fit: BoxFit.cover,
+                            errorBuilder:
+                                (ctx, err, stack) => const _ThumbFallback(),
+                          ),
                         ),
-                      );
-                    },
-                    child: CupertinoListTile(
-                      leading: ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: Image.file(
-                          File(e['path']),
-                          width: 50,
-                          height: 50,
-                          fit: BoxFit.cover,
-                          errorBuilder: (ctx, err, stack) =>
-                              const _ThumbFallback(),
+                        title: Text(e['result'].toString().split('\n').first),
+                        subtitle: Text(subtitleText),
+                        trailing: CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          child: const Icon(CupertinoIcons.delete),
+                          onPressed: () => _delete(i),
                         ),
                       ),
-                      title: Text(e['result'].toString().split('\n').first),
-                      subtitle: Text(subtitleText),
-                      trailing: CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        child: const Icon(CupertinoIcons.delete),
-                        onPressed: () => _delete(i),
-                      ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
       ),
     );
   }

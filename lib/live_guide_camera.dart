@@ -7,7 +7,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:camera/camera.dart';
 
 class LockedQr {
   const LockedQr({
@@ -78,7 +77,6 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         _GuideOverlay(guideW: guideW, guideH: guideH, highlight: _ready),
         _HintPill(main: _main, sub: _sub, highlight: _ready),
         _flash(),
-        if (_ready) _shutter(),
       ],
     );
   }
@@ -193,21 +191,6 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
     ),
   );
 
-  /* manual shutter */
-  Widget _shutter() => Align(
-    alignment: Alignment.bottomCenter,
-    child: CupertinoButton(
-      padding: const EdgeInsets.all(20),
-      color: CupertinoColors.activeBlue,
-      onPressed: _snap,
-      child: const Icon(
-        CupertinoIcons.camera,
-        color: CupertinoColors.white,
-        size: 28,
-      ),
-    ),
-  );
-
   /* ────────── capture ────────── */
   Future<void> _snap() async {
     if (_qr == null) {
@@ -215,117 +198,48 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
       return;
     }
 
-    CameraController? ctrl;
-
     try {
       final good = _qr!;
-
       final captureClock = _fromLockClock ?? (Stopwatch()..start());
-
-      String? liveFramePath;
-      if (good.sessionId != null) {
-        final exportClock = Stopwatch()..start();
-        try {
-          liveFramePath = await _scanner.exportRetainedFrame(
-            sessionId: good.sessionId!,
-          );
-          exportClock.stop();
-          debugPrint(
-            '[CAMERA_BASELINE] live_frame_export_ms=${exportClock.elapsedMilliseconds} '
-            'success=${liveFramePath != null}',
-          );
-        } catch (e) {
-          exportClock.stop();
-          debugPrint(
-            '[CAMERA_BASELINE] live_frame_export_ms=${exportClock.elapsedMilliseconds} '
-            'success=false error=$e',
-          );
-        }
-      } else {
-        debugPrint(
-          '[CAMERA_BASELINE] live_frame_export_skipped=true reason=no_session_id',
-        );
+      if (good.sessionId == null) {
+        throw StateError('Live frame session is unavailable.');
       }
 
-      final stopClock = Stopwatch()..start();
+      final exportClock = Stopwatch()..start();
+      final liveFramePath = await _scanner.exportRetainedFrame(
+        sessionId: good.sessionId!,
+      );
+      exportClock.stop();
+      debugPrint(
+        '[CAMERA_BASELINE] live_frame_export_ms=${exportClock.elapsedMilliseconds} '
+        'success=${liveFramePath != null}',
+      );
+      if (liveFramePath == null) {
+        throw StateError('Could not export the retained live frame.');
+      }
+
       await _scanner.stop();
-      stopClock.stop();
-      debugPrint(
-        '[CAMERA_BASELINE] stop_mobile_scanner_ms=${stopClock.elapsedMilliseconds}',
-      );
       _paused = true;
-
-      if (liveFramePath != null) {
-        debugPrint('[CAMERA_BASELINE] capture_source=retained_live_frame');
-        await widget.onShutter(liveFramePath, good);
-        debugPrint(
-          '[CAMERA_BASELINE] 40th_valid_to_on_shutter_return_ms=${captureClock.elapsedMilliseconds}',
-        );
-        _reset('Point at QR');
-        return;
-      }
-
-      debugPrint('[CAMERA_BASELINE] capture_source=separate_still_fallback');
-
-      final camerasClock = Stopwatch()..start();
-      final cams = await availableCameras();
-      camerasClock.stop();
-      debugPrint(
-        '[CAMERA_BASELINE] available_cameras_ms=${camerasClock.elapsedMilliseconds}',
-      );
-      final cam = cams.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cams.first,
-      );
-      // resolution is changed from medium to high
-      ctrl = CameraController(cam, ResolutionPreset.high, enableAudio: false);
-
-      final initializeClock = Stopwatch()..start();
-      await ctrl.initialize();
-      initializeClock.stop();
-      debugPrint(
-        '[CAMERA_BASELINE] camera_controller_initialize_ms=${initializeClock.elapsedMilliseconds}',
-      );
-
-      try {
-        await SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-        ]);
-
-        await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
-      } catch (e) {
-        debugPrint('Could not lock capture orientation: $e');
-      }
-
-      final takePictureClock = Stopwatch()..start();
-      final XFile shot = await ctrl.takePicture();
-      takePictureClock.stop();
-      debugPrint(
-        '[CAMERA_BASELINE] take_picture_ms=${takePictureClock.elapsedMilliseconds}',
-      );
-      debugPrint(
-        '[CAMERA_BASELINE] 40th_valid_to_photo_available_ms=${captureClock.elapsedMilliseconds}',
-      );
-
-      await widget.onShutter(shot.path, good);
+      debugPrint('[CAMERA_BASELINE] capture_source=retained_live_frame');
+      await widget.onShutter(liveFramePath, good);
       debugPrint(
         '[CAMERA_BASELINE] 40th_valid_to_on_shutter_return_ms=${captureClock.elapsedMilliseconds}',
       );
-
+      if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        try {
+          await _scanner.start();
+          _paused = false;
+        } catch (restartError) {
+          debugPrint(
+            '[CAMERA_BASELINE] scanner_restart_after_failure_error=$restartError',
+          );
+        }
+      }
       _reset('Point at QR');
     } catch (e, st) {
       debugPrint('====== _snap FAILED ======');
       debugPrint('$e');
       debugPrint('$st');
-
-      try {
-        if (_paused) {
-          await _scanner.start();
-          _paused = false;
-        }
-      } catch (scannerError) {
-        debugPrint('Could not restart scanner after failure: $scannerError');
-      }
 
       if (mounted) {
         await showCupertinoDialog<void>(
@@ -344,12 +258,19 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         );
       }
 
+      if (mounted && _paused && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        try {
+          await _scanner.start();
+          _paused = false;
+        } catch (restartError) {
+          debugPrint(
+            '[CAMERA_BASELINE] scanner_restart_after_capture_error=$restartError',
+          );
+        }
+      }
+
       _reset('Point at QR');
     } finally {
-      try {
-        await ctrl?.dispose();
-      } catch (_) {}
-
       _auto = false;
     }
   }
