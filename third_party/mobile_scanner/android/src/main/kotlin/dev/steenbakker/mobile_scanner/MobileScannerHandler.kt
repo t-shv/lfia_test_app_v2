@@ -22,6 +22,9 @@ import io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 import io.flutter.view.TextureRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import com.google.mlkit.vision.barcode.ZoomSuggestionOptions
 
@@ -170,6 +173,7 @@ class MobileScannerHandler(
             "resetScale" -> resetScale(result)
             "updateScanWindow" -> updateScanWindow(call, result)
             "setAcceptanceGeometry" -> setAcceptanceGeometry(call, result)
+            "exportRetainedFrame" -> exportRetainedFrame(call, result)
             else -> result.notImplemented()
         }
     }
@@ -363,6 +367,27 @@ class MobileScannerHandler(
             geometry.maxFill,
         )
         result.success(null)
+    }
+
+    private fun exportRetainedFrame(call: MethodCall, result: MethodChannel.Result) {
+        val sessionId = (call.argument<Number>("sessionId"))?.toLong()
+        if (sessionId == null) {
+            result.error("INVALID_SESSION_ID", "A scanner session ID is required.", null)
+            return
+        }
+
+        val scanner = mobileScanner
+        CoroutineScope(Dispatchers.IO).launch {
+            val path = try {
+                scanner?.exportRetainedFrame(sessionId)
+            } catch (_: Exception) {
+                null
+            }
+
+            Handler(Looper.getMainLooper()).post {
+                result.success(path)
+            }
+        }
     }
 
     private fun buildBarcodeScannerOptions(formats: List<Int>?, autoZoom: Boolean): BarcodeScannerOptions? {

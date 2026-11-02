@@ -3,6 +3,7 @@ package dev.steenbakker.mobile_scanner
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
@@ -10,6 +11,7 @@ import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.YuvImage
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Handler
@@ -50,11 +52,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class MobileScanner(
@@ -123,6 +127,13 @@ class MobileScanner(
         val accepted: Boolean,
         val fill: Double?,
         val configured: Boolean,
+    )
+
+    private data class FrameQuality(
+        val sharpness: Double,
+        val meanLuminance: Double,
+        val extremeFraction: Double,
+        val sampleCount: Int,
     )
 
     companion object {
@@ -261,6 +272,35 @@ class MobileScanner(
                 if (frameSessionId != null && nativeAcceptance.configured &&
                     nativeAcceptance.accepted
                 ) {
+                    val qualityStartNanos = System.nanoTime()
+                    try {
+                        val quality = measureYPlaneQuality(imageProxy)
+                        val qualityDurationMicros =
+                            (System.nanoTime() - qualityStartNanos) / 1_000L
+                        Log.d(
+                            "MobileScanner",
+                            "[NATIVE_FRAME_QUALITY] " +
+                                "session_id=${frameSessionId ?: -1L} " +
+                                "event_id=$detectionEventId " +
+                                "sharpness=${quality.sharpness} " +
+                                "mean_luminance=${quality.meanLuminance} " +
+                                "extreme_fraction=${quality.extremeFraction} " +
+                                "sample_count=${quality.sampleCount} " +
+                                "compute_duration_us=$qualityDurationMicros",
+                        )
+                    } catch (exception: Exception) {
+                        val qualityDurationMicros =
+                            (System.nanoTime() - qualityStartNanos) / 1_000L
+                        Log.d(
+                            "MobileScanner",
+                            "[NATIVE_FRAME_QUALITY] " +
+                                "session_id=${frameSessionId ?: -1L} " +
+                                "event_id=$detectionEventId " +
+                                "success=false compute_duration_us=$qualityDurationMicros " +
+                                "reason=${exception.message ?: exception.javaClass.simpleName}",
+                        )
+                    }
+
                     retainFirstYuvFrame(
                         imageProxy,
                         mediaImage,
@@ -475,6 +515,183 @@ class MobileScanner(
     private fun clearRetainedFrameLocked() {
         retainedFrame?.bytes?.fill(0)
         retainedFrame = null
+    }
+
+    fun exportRetainedFrame(expectedSessionId: Long): String? {
+        val frame = synchronized(retainedFrameLock) {
+            if (!retentionSessionActive || retentionSessionId != expectedSessionId) {
+                return null
+            }
+
+            val current = retainedFrame ?: return null
+            val snapshot = current.copy(bytes = current.bytes.copyOf())
+            clearRetainedFrameLocked()
+            snapshot
+        }
+
+        val exportStartNanos = System.nanoTime()
+        var decoded: Bitmap? = null
+        var oriented: Bitmap? = null
+        var outputFile: File? = null
+        var convertedNv21: ByteArray? = null
+        try {
+            val nv21Bytes = if (frame.bufferFormat == ImageFormat.NV21) {
+                frame.bytes
+            } else {
+                convertI420ToNv21(frame.bytes, frame.width, frame.height).also {
+                    convertedNv21 = it
+                }
+            }
+            val jpegBytes = ByteArrayOutputStream().use { output ->
+                val yuvImage = YuvImage(
+                    nv21Bytes,
+                    ImageFormat.NV21,
+                    frame.width,
+                    frame.height,
+                    null,
+                )
+                require(
+                    yuvImage.compressToJpeg(
+                        Rect(0, 0, frame.width, frame.height),
+                        95,
+                        output,
+                    ),
+                ) { "YUV JPEG compression failed" }
+                output.toByteArray()
+            }
+
+            decoded = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+                ?: throw IllegalStateException("JPEG decode failed")
+            val rotation = ((frame.rotationDegrees % 360) + 360) % 360
+            oriented = if (rotation == 0) {
+                decoded
+            } else {
+                val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+                Bitmap.createBitmap(
+                    decoded,
+                    0,
+                    0,
+                    decoded.width,
+                    decoded.height,
+                    matrix,
+                    true,
+                )
+            }
+
+            outputFile = File.createTempFile("mobile_scanner_live_", ".jpg", activity.cacheDir)
+            val outputBitmap = oriented ?: throw IllegalStateException("Oriented bitmap unavailable")
+            val output = outputFile ?: throw IllegalStateException("Output file unavailable")
+            output.outputStream().use { stream ->
+                require(outputBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)) {
+                    "Oriented JPEG compression failed"
+                }
+            }
+            val durationMicros = (System.nanoTime() - exportStartNanos) / 1_000L
+            Log.d(
+                "MobileScanner",
+                "[NATIVE_FRAME_EXPORT] success=true session_id=$expectedSessionId " +
+                    "path=${output.absolutePath} bytes=${output.length()} " +
+                    "width=${outputBitmap.width} height=${outputBitmap.height} " +
+                    "rotation_degrees=${frame.rotationDegrees} duration_us=$durationMicros",
+            )
+            return output.absolutePath
+        } catch (exception: Exception) {
+            outputFile?.delete()
+            val durationMicros = (System.nanoTime() - exportStartNanos) / 1_000L
+            Log.d(
+                "MobileScanner",
+                "[NATIVE_FRAME_EXPORT] success=false session_id=$expectedSessionId " +
+                    "duration_us=$durationMicros " +
+                    "reason=${exception.message ?: exception.javaClass.simpleName}",
+            )
+            return null
+        } finally {
+            if (oriented != null && oriented !== decoded) {
+                oriented.recycle()
+            }
+            decoded?.recycle()
+            convertedNv21?.fill(0)
+            frame.bytes.fill(0)
+        }
+    }
+
+    private fun convertI420ToNv21(bytes: ByteArray, width: Int, height: Int): ByteArray {
+        val frameSize = width * height
+        val chromaSize = frameSize / 4
+        require(bytes.size >= frameSize + chromaSize * 2) {
+            "I420 buffer is too small"
+        }
+
+        val nv21 = ByteArray(frameSize + chromaSize * 2)
+        bytes.copyInto(nv21, 0, 0, frameSize)
+        val uOffset = frameSize
+        val vOffset = frameSize + chromaSize
+        var outputOffset = frameSize
+        for (index in 0 until chromaSize) {
+            nv21[outputOffset++] = bytes[vOffset + index]
+            nv21[outputOffset++] = bytes[uOffset + index]
+        }
+        return nv21
+    }
+
+    private fun measureYPlaneQuality(imageProxy: ImageProxy): FrameQuality {
+        val plane = imageProxy.planes.getOrNull(0)
+            ?: throw IllegalArgumentException("Y plane unavailable")
+        val width = imageProxy.width
+        val height = imageProxy.height
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val buffer = plane.buffer.duplicate()
+        val limit = buffer.limit()
+        val gridWidth = 32
+        val gridHeight = 24
+
+        require(width >= 3 && height >= 3) {
+            "Y plane image is too small: ${width}x${height}"
+        }
+        require(rowStride > 0 && pixelStride > 0) {
+            "invalid Y plane stride row=$rowStride pixel=$pixelStride"
+        }
+
+        var luminanceSum = 0L
+        var gradientSum = 0L
+        var extremeCount = 0
+        var sampleCount = 0
+
+        for (gridY in 0 until gridHeight) {
+            val y = (gridY * (height - 2)) / (gridHeight - 1)
+            for (gridX in 0 until gridWidth) {
+                val x = (gridX * (width - 2)) / (gridWidth - 1)
+                val index = y * rowStride + x * pixelStride
+                val rightIndex = y * rowStride + (x + 1) * pixelStride
+                val downIndex = (y + 1) * rowStride + x * pixelStride
+                if (index !in 0 until limit ||
+                    rightIndex !in 0 until limit ||
+                    downIndex !in 0 until limit
+                ) {
+                    continue
+                }
+
+                val luminance = buffer.get(index).toInt() and 0xFF
+                val rightLuminance = buffer.get(rightIndex).toInt() and 0xFF
+                val downLuminance = buffer.get(downIndex).toInt() and 0xFF
+                luminanceSum += luminance
+                gradientSum += abs(luminance - rightLuminance)
+                gradientSum += abs(luminance - downLuminance)
+                if (luminance <= 16 || luminance >= 239) {
+                    extremeCount++
+                }
+                sampleCount++
+            }
+        }
+
+        require(sampleCount > 0) { "no valid Y plane samples" }
+        return FrameQuality(
+            sharpness = gradientSum.toDouble() / (sampleCount * 2.0),
+            meanLuminance = luminanceSum.toDouble() / sampleCount,
+            extremeFraction = extremeCount.toDouble() / sampleCount,
+            sampleCount = sampleCount,
+        )
     }
 
     private fun evaluateAcceptance(

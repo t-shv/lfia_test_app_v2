@@ -10,10 +10,15 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:camera/camera.dart';
 
 class LockedQr {
-  const LockedQr({required this.barcode, required this.captureSize});
+  const LockedQr({
+    required this.barcode,
+    required this.captureSize,
+    this.sessionId,
+  });
 
   final Barcode barcode;
   final Size captureSize;
+  final int? sessionId;
 }
 
 class LiveGuideCamera extends StatefulWidget {
@@ -143,7 +148,7 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         return _reset('Move back');
       }
 
-      _qr = LockedQr(barcode: qr, captureSize: cap.size);
+      _qr = LockedQr(barcode: qr, captureSize: cap.size, sessionId: sessionId);
 
       _validSequenceClock ??= Stopwatch()..start();
       _goodFrames++;
@@ -217,6 +222,31 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
 
       final captureClock = _fromLockClock ?? (Stopwatch()..start());
 
+      String? liveFramePath;
+      if (good.sessionId != null) {
+        final exportClock = Stopwatch()..start();
+        try {
+          liveFramePath = await _scanner.exportRetainedFrame(
+            sessionId: good.sessionId!,
+          );
+          exportClock.stop();
+          debugPrint(
+            '[CAMERA_BASELINE] live_frame_export_ms=${exportClock.elapsedMilliseconds} '
+            'success=${liveFramePath != null}',
+          );
+        } catch (e) {
+          exportClock.stop();
+          debugPrint(
+            '[CAMERA_BASELINE] live_frame_export_ms=${exportClock.elapsedMilliseconds} '
+            'success=false error=$e',
+          );
+        }
+      } else {
+        debugPrint(
+          '[CAMERA_BASELINE] live_frame_export_skipped=true reason=no_session_id',
+        );
+      }
+
       final stopClock = Stopwatch()..start();
       await _scanner.stop();
       stopClock.stop();
@@ -224,6 +254,18 @@ class _LiveGuideCameraState extends State<LiveGuideCamera> {
         '[CAMERA_BASELINE] stop_mobile_scanner_ms=${stopClock.elapsedMilliseconds}',
       );
       _paused = true;
+
+      if (liveFramePath != null) {
+        debugPrint('[CAMERA_BASELINE] capture_source=retained_live_frame');
+        await widget.onShutter(liveFramePath, good);
+        debugPrint(
+          '[CAMERA_BASELINE] 40th_valid_to_on_shutter_return_ms=${captureClock.elapsedMilliseconds}',
+        );
+        _reset('Point at QR');
+        return;
+      }
+
+      debugPrint('[CAMERA_BASELINE] capture_source=separate_still_fallback');
 
       final camerasClock = Stopwatch()..start();
       final cams = await availableCameras();

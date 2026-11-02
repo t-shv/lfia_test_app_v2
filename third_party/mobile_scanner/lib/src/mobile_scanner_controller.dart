@@ -577,6 +577,17 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
     await _applyAcceptanceGeometry();
   }
 
+  /// Export the retained native frame for the given scanner session.
+  Future<String?> exportRetainedFrame({required int sessionId}) async {
+    if (_isDisposed) {
+      return null;
+    }
+
+    return MobileScannerPlatform.instance.exportRetainedFrame(
+      sessionId: sessionId,
+    );
+  }
+
   Future<void> _applyAcceptanceGeometry() async {
     final guideWidth = _acceptanceGuideWidth;
     final guideHeight = _acceptanceGuideHeight;

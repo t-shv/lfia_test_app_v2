@@ -131,6 +131,11 @@ abstract class MobileScannerPlatform extends PlatformInterface {
     );
   }
 
+  /// Export the retained native frame for the given scanner session.
+  Future<String?> exportRetainedFrame({required int sessionId}) {
+    return Future<String?>.value(null);
+  }
+
   /// Dispose of this [MobileScannerPlatform] instance.
   Future<void> dispose() {
     throw UnimplementedError('dispose() has not been implemented.');

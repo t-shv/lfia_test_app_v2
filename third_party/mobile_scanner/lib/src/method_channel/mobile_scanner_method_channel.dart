@@ -438,6 +438,13 @@ class MethodChannelMobileScanner extends MobileScannerPlatform {
   }
 
   @override
+  Future<String?> exportRetainedFrame({required int sessionId}) async {
+    return methodChannel.invokeMethod<String>('exportRetainedFrame', {
+      'sessionId': sessionId,
+    });
+  }
+
+  @override
   Future<void> dispose() async {
     await updateScanWindow(null);
     await stop();
