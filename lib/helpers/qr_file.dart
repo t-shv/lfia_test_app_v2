@@ -6,15 +6,23 @@ import 'package:mobile_scanner/mobile_scanner.dart'
     show Barcode, BarcodeFormat;
 
 /// Scan a JPEG/PNG on disk and return the first QR `Barcode` (or `null`)
-Future<Barcode?> detectQrOnFile(String path) async {
+Future<Barcode?> detectQrOnFile(
+  String path, {
+  void Function(int count)? onBarcodeCount,
+}) async {
   // ❶ use mlkit’s own enum, NOT `.index`
   final scanner = mlkit.BarcodeScanner(
     formats: [mlkit.BarcodeFormat.qrCode],
   );
 
   final input = mlkit.InputImage.fromFilePath(path);
-  final list  = await scanner.processImage(input);
-  await scanner.close();
+  late final List<mlkit.Barcode> list;
+  try {
+    list = await scanner.processImage(input);
+  } finally {
+    await scanner.close();
+  }
+  onBarcodeCount?.call(list.length);
 
   if (list.isEmpty) return null;
 

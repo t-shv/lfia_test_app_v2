@@ -258,8 +258,15 @@ class MobileScanner(
                         "fill=${nativeAcceptance.fill ?: "unavailable"} sequence=$nativeSequence",
                 )
 
-                if (frameSessionId != null) {
-                    retainFirstYuvFrame(imageProxy, mediaImage, frameSessionId)
+                if (frameSessionId != null && nativeAcceptance.configured &&
+                    nativeAcceptance.accepted
+                ) {
+                    retainFirstYuvFrame(
+                        imageProxy,
+                        mediaImage,
+                        frameSessionId,
+                        detectionEventId,
+                    )
                 }
 
                 val positiveCount = nativeBarcodePositiveCount.incrementAndGet()
@@ -362,6 +369,7 @@ class MobileScanner(
         imageProxy: ImageProxy,
         mediaImage: android.media.Image,
         sessionId: Long,
+        eventId: Long,
     ) {
         synchronized(retainedFrameLock) {
             if (!retentionSessionActive || retentionSessionId != sessionId ||
@@ -440,6 +448,7 @@ class MobileScanner(
                 "MobileScanner",
                 "[NATIVE_FRAME_RETENTION] " +
                     "success=$retained copy_duration_us=$durationMicros " +
+                    "session_id=$sessionId event_id=$eventId " +
                     "bytes=${copiedBytes.size} width=$width height=$height " +
                     "rotation_degrees=$rotationDegrees " +
                     "source_format=$sourceFormat buffer_format=${yuv.type}",

@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'helpers/qr_file.dart';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -201,18 +202,64 @@ debugPrint('[PROCESS_BASELINE] image_rotation_ms=${rotationClock.elapsedMillisec
           '${tmpDir.path}/oriented_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
 // fixed orientation
+      final orientedJpeg = img.encodeJpg(fixedImage, quality: 95);
       final orientedSaveClock = Stopwatch()..start();
       await File(orientedPath).writeAsBytes(
-        img.encodeJpg(fixedImage, quality: 95),
+        orientedJpeg,
       );
       orientedSaveClock.stop();
       debugPrint('[PROCESS_BASELINE] oriented_image_save_ms=${orientedSaveClock.elapsedMilliseconds}');
 
+      if (kDebugMode) {
+        final originalQrClock = Stopwatch()..start();
+        var originalBarcodeCount = 0;
+        Barcode? originalQr;
+        try {
+          originalQr = await detectQrOnFile(
+            imagePath,
+            onBarcodeCount: (count) => originalBarcodeCount = count,
+          );
+          originalQrClock.stop();
+          debugPrint(
+            '[QR_FILE_DIAGNOSTIC] original_dimensions=${decoded.width}x${decoded.height} '
+            'jpeg_bytes=${originalBytes.length} '
+            'duration_ms=${originalQrClock.elapsedMilliseconds} '
+            'barcode_count=$originalBarcodeCount '
+            'found=${originalQr != null} '
+            'valid_corners=${originalQr != null && originalQr.corners.length >= 4}',
+          );
+        } catch (error) {
+          originalQrClock.stop();
+          debugPrint(
+            '[QR_FILE_DIAGNOSTIC] original_dimensions=${decoded.width}x${decoded.height} '
+            'jpeg_bytes=${originalBytes.length} '
+            'duration_ms=${originalQrClock.elapsedMilliseconds} '
+            'barcode_count=$originalBarcodeCount error=$error',
+          );
+        }
+      }
+
       /* -------- 2. Re-detect QR on oriented still photo -------- */
       final qrRedetectClock = Stopwatch()..start();
-      final Barcode? highResQr = await detectQrOnFile(orientedPath);
+      var orientedBarcodeCount = 0;
+      final Barcode? highResQr = await detectQrOnFile(
+        orientedPath,
+        onBarcodeCount: kDebugMode
+            ? (count) => orientedBarcodeCount = count
+            : null,
+      );
       qrRedetectClock.stop();
       debugPrint('[PROCESS_BASELINE] qr_redetection_ms=${qrRedetectClock.elapsedMilliseconds} found=${highResQr != null}');
+      if (kDebugMode) {
+        debugPrint(
+          '[QR_FILE_DIAGNOSTIC] oriented_dimensions=${fixedImage.width}x${fixedImage.height} '
+          'jpeg_bytes=${orientedJpeg.length} '
+          'duration_ms=${qrRedetectClock.elapsedMilliseconds} '
+          'barcode_count=$orientedBarcodeCount '
+          'found=${highResQr != null} '
+          'valid_corners=${highResQr != null && highResQr.corners.length >= 4}',
+        );
+      }
 
       final qrValidationClock = Stopwatch()..start();
       final String code =
